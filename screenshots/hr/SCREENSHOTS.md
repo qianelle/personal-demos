@@ -26,14 +26,17 @@
 
 ### 3.1 总览看板
 
-[![通用人事管理 · 总览看板](assets/hr-00-overview-APP.png)](assets/hr-00-overview-APP.png)
+[![通用人事管理 · 总览看板]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/9f794818-db4d-4564-a412-879c38e140cf" />
+
+
 
 应用落地页。展示在职人数、待离职人数、使用中账号数、未闭环事项数四个指标，以及部门人数分布、账号状态分布、合同到期预警与未闭环交接事项清单。
 
 <details>
 <summary>应用导航（可选）</summary>
 
-[![应用导航](assets/hr-01-app-home-APP.png)](assets/hr-01-app-home-APP.png)
+[![应用导航]<img width="369" height="999" alt="image" src="https://github.com/user-attachments/assets/d3342bb5-5e27-4a51-a929-fe5beacf4e2e" />
+
 
 左侧导航按数据看板、业务办理、主数据与台账分组。
 
@@ -43,48 +46,43 @@
 
 ### 4.1 员工档案列表
 
-[![员工档案列表](assets/hr-02-employee-list-APP.png)](assets/hr-02-employee-list-APP.png)
+[![员工档案列表]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/7404fbb9-18d3-4883-9dba-61c403397b71" />
+
 
 30 条员工记录，展示工号、姓名、所属部门、岗位、员工状态与合同到期日；列表顶部提供在职人员、试用期、30 天内合同到期、已离职等视图入口。
 
 ### 4.2 员工档案数据看板
 
-[![员工档案数据看板](assets/hr-03-employee-dashboard-APP.png)](assets/hr-03-employee-dashboard-APP.png)
+[![员工档案数据看板]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/8d54a13e-2bde-45a8-9cc0-371f2ac0586d" />
+
 
 在职人数指标、部门人数分布、年度入职人数分布与合同到期预警 3 条。
-
-<details>
-<summary>视图与字段配置（可选）</summary>
-
-[![视图与显示列](assets/hr-04-employee-views-CFG.png)](assets/hr-04-employee-views-CFG.png)
-
-数据管理页的视图显隐、显示列与排序设置。
-
-</details>
 
 ## 5. 业务单据与审批
 
 ### 5.1 请假申请单
 
-[![请假申请单填写页](assets/hr-05-leave-form-APP.png)](assets/hr-05-leave-form-APP.png)
+[![请假申请单填写页]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/6b10459a-51ba-42d0-bdb9-0c6e14edba6a" />
+
 
 起止时间、只读的请假时长、请假类型、事由与附件字段；时长按含首尾整天计算。
 
 ### 5.2 两级审批单据
 
-[![2 天请假单与流程轨迹](assets/hr-06-leave-2days-APP.png)](assets/hr-06-leave-2days-APP.png)
+[![2 天请假单与流程轨迹]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/ceebb69a-74b9-4f13-a113-a5c8713cf8ab" />
 
 时长未触发加签条件的单据，经主管审批后由 HR 备案结束。
 
 ### 5.3 三级审批单据
 
-[![5 天请假单与流程轨迹](assets/hr-07-leave-5days-APP.png)](assets/hr-07-leave-5days-APP.png)
+[![5 天请假单与流程轨迹]<img width="2022" height="1411" alt="image" src="https://github.com/user-attachments/assets/751fe52d-a032-4d2d-9cd5-9da4a7a5684b" />
+
 
 时长触发加签条件的单据，在主管与 HR 备案之间增加部门负责人节点。
 
 ### 5.4 请假数据看板
 
-[![请假数据看板](assets/hr-08-leave-dashboard-APP.png)](assets/hr-08-leave-dashboard-APP.png)
+[![请假数据看板]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/c6c87ec1-185b-42f4-b09e-93f6562d70e5" />
 
 请假类型占比、部门请假时长排行与个人请假明细。
 
@@ -92,74 +90,24 @@
 
 ### 6.1 账号与权限台账
 
-[![账号与权限台账](assets/hr-09-account-ledger-APP.png)](assets/hr-09-account-ledger-APP.png)
+[![账号与权限台账]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/1044e54a-9292-4189-9c01-640cf13fddb7" />
 
 18 条记录，含系统名称、账号角色、账号状态、开通日与回收日。
 
 ### 6.2 离职交接单
 
-[![离职交接单详情](assets/hr-10-offboard-detail-APP.png)](assets/hr-10-offboard-detail-APP.png)
+[![离职交接单详情]<img width="2022" height="2011" alt="image" src="https://github.com/user-attachments/assets/d6771310-3d39-4049-9bcb-fb476a211fdb" />
 
 主表信息与 5 行交接事项，含事项类别、完成状态、完成日期与责任人。
 
 ### 6.3 并行会签轨迹
 
-[![离职并行会签流程轨迹](assets/hr-11-parallel-trace-APP.png)](assets/hr-11-parallel-trace-APP.png)
+[![离职并行会签流程轨迹]<img width="2229" height="1203" alt="image" src="https://github.com/user-attachments/assets/b295aa8f-7540-4019-abad-afa6eb069e6b" />
 
 四条处理线并行执行，全部办结后流程结束。
 
 ### 6.4 入转调离看板
 
-[![入转调离看板](assets/hr-12-hr-dashboard-APP.png)](assets/hr-12-hr-dashboard-APP.png)
+[![入转调离看板]<img width="2022" height="1259" alt="image" src="https://github.com/user-attachments/assets/c81b657c-e0a9-448f-8def-24833382e28d" />
 
 在职与待离职指标、异动类型分布、账号状态分布与已回收账号明细。
-
-### 6.5 未闭环交接事项清单
-
-[![未闭环交接事项清单](assets/hr-13-open-items-APP.png)](assets/hr-13-open-items-APP.png)
-
-完成状态不为「已完成」的 2 行事项及其类别、责任人与说明。
-
-<details>
-<summary>入职登记与异动申请（可选）</summary>
-
-[![入职登记详情](assets/hr-14-onboard-detail-APP.png)](assets/hr-14-onboard-detail-APP.png)
-
-[![异动申请详情](assets/hr-15-transfer-detail-APP.png)](assets/hr-15-transfer-detail-APP.png)
-
-</details>
-
-## 7. 规则配置界面
-
-### 7.1 时长公式
-
-[![请假时长公式](assets/hr-16-leave-formula-CFG.png)](assets/hr-16-leave-formula-CFG.png)
-
-含首尾整天的时长计算与只读设置。
-
-### 7.2 请假流程分支
-
-[![请假流程设计](assets/hr-17-leave-workflow-CFG.png)](assets/hr-17-leave-workflow-CFG.png)
-
-时长加签分支、其他情况分支与统一汇入的 HR 备案节点。
-
-### 7.3 并行分支
-
-[![离职交接流程设计](assets/hr-18-parallel-workflow-CFG.png)](assets/hr-18-parallel-workflow-CFG.png)
-
-四条处理线全部汇入同一个结束节点。
-
-### 7.4 字段可见范围
-
-[![字段权限](assets/hr-19-field-permission-CFG.png)](assets/hr-19-field-permission-CFG.png)
-
-证件信息与联系电话的可见范围配置。
-
-<details>
-<summary>提交校验与报表配置（可选）</summary>
-
-[![请假提交校验](assets/hr-20-leave-validation-CFG.png)](assets/hr-20-leave-validation-CFG.png)
-
-[![报表字段配置](assets/hr-21-report-CFG.png)](assets/hr-21-report-CFG.png)
-
-</details>
