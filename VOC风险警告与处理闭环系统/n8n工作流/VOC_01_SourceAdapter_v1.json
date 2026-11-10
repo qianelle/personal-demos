@@ -1,0 +1,279 @@
+{
+  "name": "VOC_01_SourceAdapter_v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "aea544ce-a70d-4486-b44d-28268ff1b493",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(item => item.json);\n\nif (rows.length === 0) {\n  return [];\n}\n\nconst events = [];\n\nfunction cleanLocalTimestamp(value) {\n  if (!value) return '';\n  return String(value).replace(/\\D/g, '');\n}\n\nfor (const r of rows) {\n  const initialContentId = `${r.review_id}::INITIAL`;\n\n  // 首评尚未进入 Canonical Layer\n  if (!r.initial_exists) {\n    events.push({\n      source_staging_id: r.staging_id,\n      collector_run_id: r.collector_run_id,\n\n      platform: r.platform,\n      shop_name: r.shop_name,\n\n      product_id: r.item_id,\n      product_name: r.item_name,\n      sku_id: r.sku_id,\n      sku_name: r.sku_name,\n\n      source_review_id: r.review_id,\n\n      content_id: initialContentId,\n      content_type: 'INITIAL_REVIEW',\n\n      root_review_id: initialContentId,\n      parent_content_id: null,\n\n      author_role: 'BUYER',\n      author_id: r.buyer_id,\n\n      product_rating: r.rating,\n      rating_scale_max: 5,\n      rating_label: r.rating_label,\n\n      content_text: r.review_text,\n      content_time: r.review_time_local,\n\n      content_key:\n        `${r.platform}::${r.shop_name}::${initialContentId}`\n    });\n  }\n\n  // 新追评尚未进入 Canonical Layer\n  if (\n    r.append_review_text &&\n    r.append_review_time_local &&\n    !r.followup_exists\n  ) {\n    const followupContentId =\n      `${r.review_id}::FOLLOWUP::${cleanLocalTimestamp(\n        r.append_review_time_local\n      )}`;\n\n    events.push({\n      source_staging_id: r.staging_id,\n      collector_run_id: r.collector_run_id,\n\n      platform: r.platform,\n      shop_name: r.shop_name,\n\n      product_id: r.item_id,\n      product_name: r.item_name,\n      sku_id: r.sku_id,\n      sku_name: r.sku_name,\n\n      source_review_id: r.review_id,\n\n      content_id: followupContentId,\n      content_type: 'FOLLOWUP_REVIEW',\n\n      root_review_id: initialContentId,\n      parent_content_id: initialContentId,\n\n      author_role: 'BUYER',\n      author_id: r.buyer_id,\n\n      product_rating: r.rating,\n      rating_scale_max: 5,\n      rating_label: r.rating_label,\n\n      content_text: r.append_review_text,\n      content_time: r.append_review_time_local,\n\n      content_key:\n        `${r.platform}::${r.shop_name}::${followupContentId}`\n    });\n  }\n}\n\nreturn [\n  {\n    json: {\n      collector_run_id: rows[0].collector_run_id,\n      staging_count: rows.length,\n      event_count: events.length,\n      events\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "23edbc96-1978-4b9f-ae86-0966842f098d",
+      "name": "Build Canonical Events"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO voc.raw_reviews (\n    content_key,\n    platform,\n    shop_id,\n    shop_name,\n    content_id,\n\n    product_id,\n    product_name,\n    sku_id,\n    sku_name,\n\n    content_text,\n    content_time,\n\n    product_rating,\n    service_rating,\n    logistics_rating,\n    rating_scale_max,\n    rating_label,\n\n    content_type,\n    root_review_id,\n    parent_content_id,\n\n    author_id,\n    author_role,\n\n    data_source,\n    processing_status,\n\n    source_staging_id,\n    source_review_id\n)\nVALUES (\n    $1,\n    $2,\n    NULL,\n    $3,\n    $4,\n\n    $5,\n    $6,\n    $7,\n    $8,\n\n    $9,\n    $10,\n\n    $11,\n    NULL,\n    NULL,\n    $12,\n    $13,\n\n    $14,\n    $15,\n    $16,\n\n    $17,\n    $18,\n\n    'Browser',\n    'NEW',\n\n    $19,\n    $20\n)\nON CONFLICT (content_key)\nDO NOTHING\nRETURNING\n    raw_id,\n    content_key,\n    content_id,\n    content_type,\n    processing_status,\n    source_staging_id;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.content_key,\n  $json.platform,\n  $json.shop_name,\n  $json.content_id,\n\n  $json.product_id,\n  $json.product_name,\n  $json.sku_id,\n  $json.sku_name,\n\n  $json.content_text,\n  $json.content_time,\n\n  $json.product_rating,\n  $json.rating_scale_max,\n  $json.rating_label,\n\n  $json.content_type,\n  $json.root_review_id,\n  $json.parent_content_id,\n\n  $json.author_id,\n  $json.author_role,\n\n  $json.source_staging_id,\n  $json.source_review_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1104,
+        -272
+      ],
+      "id": "e19ec887-489f-48da-be4b-6f1d86279d41",
+      "name": "Insert Raw Reviews",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.review_source_staging\nSET\n    processing_status = 'PROCESSED',\n    processed_at = CURRENT_TIMESTAMP,\n    error_message = NULL\nWHERE collector_run_id = $1\n  AND processing_status = 'NEW'\nRETURNING\n    staging_id,\n    collector_run_id,\n    review_id,\n    processing_status,\n    processed_at;",
+        "options": {
+          "queryReplacement": "={{ [\n  $('Read Next Pending Staging Batch').first().json.collector_run_id\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1632,
+        16
+      ],
+      "id": "40571f49-7da7-473a-a7d9-c5e178c62fed",
+      "name": "Mark Staging Processed",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH next_run AS (\n    SELECT\n        s.collector_run_id\n    FROM voc.review_source_staging s\n    JOIN voc.collector_runs cr\n      ON cr.run_id = s.collector_run_id\n    WHERE s.processing_status = 'NEW'\n      AND cr.status = 'SUCCESS'\n    GROUP BY\n        s.collector_run_id,\n        cr.finished_at\n    ORDER BY cr.finished_at ASC\n    LIMIT 1\n)\n\nSELECT\n    s.*,\n\n    -- 显式保留源业务时间字符串，\n    -- 避免 n8n JSON 显示为 UTC 后再拿去生成 content_id\n    TO_CHAR(\n        s.review_time,\n        'YYYY-MM-DD HH24:MI:SS'\n    ) AS review_time_local,\n\n    CASE\n        WHEN s.append_review_time IS NULL THEN NULL\n        ELSE TO_CHAR(\n            s.append_review_time,\n            'YYYY-MM-DD HH24:MI:SS'\n        )\n    END AS append_review_time_local,\n\n    -- Canonical 层是否已经存在首评事件\n    EXISTS (\n        SELECT 1\n        FROM voc.raw_reviews r\n        WHERE r.platform = s.platform\n          AND COALESCE(r.shop_name, '') = COALESCE(s.shop_name, '')\n          AND r.source_review_id = s.review_id\n          AND r.content_type = 'INITIAL_REVIEW'\n    ) AS initial_exists,\n\n    -- Canonical 层是否已经存在这条具体追评事件\n    CASE\n        WHEN s.append_review_text IS NULL\n          OR s.append_review_time IS NULL\n        THEN FALSE\n\n        ELSE EXISTS (\n            SELECT 1\n            FROM voc.raw_reviews r\n            WHERE r.platform = s.platform\n              AND COALESCE(r.shop_name, '') = COALESCE(s.shop_name, '')\n              AND r.source_review_id = s.review_id\n              AND r.content_type = 'FOLLOWUP_REVIEW'\n              AND r.content_time = s.append_review_time\n        )\n    END AS followup_exists\n\nFROM voc.review_source_staging s\nWHERE s.collector_run_id = (\n    SELECT collector_run_id\n    FROM next_run\n)\n  AND s.processing_status = 'NEW'\n\nORDER BY s.source_row_no;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        224,
+        0
+      ],
+      "id": "77e5149a-15ad-46ce-9461-47aed0e54ae6",
+      "name": "Read Next Pending Staging Batch",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "403859db-9164-4f90-a351-6b688654c5bd",
+              "leftValue": "={{ $json.event_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        672,
+        0
+      ],
+      "id": "a8a92ae1-b6dc-43a0-a8d6-5a596a0ca354",
+      "name": "Has Canonical Events?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\n\nif (!Array.isArray(result.events)) {\n  throw new Error('events 不是数组');\n}\n\nreturn result.events.map(event => ({\n  json: {\n    ...event\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        -272
+      ],
+      "id": "828a017b-f9e7-4ae7-9c8e-0015aedc9a71",
+      "name": "Expand Canonical Events"
+    },
+    {
+      "parameters": {
+        "jsCode": "const insertResults = $input.all();\nconst adapterResult = $('Build Canonical Events').first().json;\n\nreturn [\n  {\n    json: {\n      collector_run_id: adapterResult.collector_run_id,\n      staging_count: adapterResult.staging_count,\n      event_count: adapterResult.event_count,\n      insert_output_count: insertResults.length\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -272
+      ],
+      "id": "1574f47e-0d22-4e80-bebc-353107959236",
+      "name": "Finalize Adapter Batch"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        208
+      ],
+      "id": "37013b87-67d4-40ef-87e9-d8a74b51b921",
+      "name": "Called by Orchestrator v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read Next Pending Staging Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Canonical Events": {
+      "main": [
+        [
+          {
+            "node": "Has Canonical Events?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Raw Reviews": {
+      "main": [
+        [
+          {
+            "node": "Finalize Adapter Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Next Pending Staging Batch": {
+      "main": [
+        [
+          {
+            "node": "Build Canonical Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Canonical Events?": {
+      "main": [
+        [
+          {
+            "node": "Expand Canonical Events",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mark Staging Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expand Canonical Events": {
+      "main": [
+        [
+          {
+            "node": "Insert Raw Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Adapter Batch": {
+      "main": [
+        [
+          {
+            "node": "Mark Staging Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called by Orchestrator v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read Next Pending Staging Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "18fed467-891f-413d-8249-7d8728bcb9f0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "iq2YLEY6QC0qLf0i",
+  "tags": []
+}

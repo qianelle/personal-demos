@@ -1,0 +1,614 @@
+{
+  "name": "VOC_00_CSVLoader_v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        -144
+      ],
+      "id": "5b8f2892-ea19-41ca-969b-ba6da4fbe9f6",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ '/data/inbound/' + $json.file_name }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        96,
+        0
+      ],
+      "id": "b95de09a-5571-424d-a5aa-1bed5eeb5a15",
+      "name": "Read/Write Files from Disk"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        1648,
+        32
+      ],
+      "id": "84fb9526-6210-4e60-88cc-6457cbb45ad4",
+      "name": "Extract from File"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        304,
+        0
+      ],
+      "id": "b79f8a63-bb8d-4fbf-9dea-ffd21426102c",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "binaryData": true,
+        "dataPropertyName": "source_file_sha256"
+      },
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 2,
+      "position": [
+        528,
+        16
+      ],
+      "id": "c44c2916-58bf-4ee0-b628-788bfcc80bdb",
+      "name": "Crypto"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    EXISTS (\n        SELECT 1\n        FROM voc.collector_runs\n        WHERE source_file_sha256 = $1\n          AND status = 'SUCCESS'\n    ) AS already_processed,\n\n    $1::text AS source_file_sha256,\n    $2::text AS source_file_name,\n    $3::text AS source_file_path;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.source_file_sha256,\n  $json.fileName,\n  '/data/inbound/' + $json.fileName\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        720,
+        16
+      ],
+      "id": "25915f26-aaac-4579-a4a9-cd70e644dabb",
+      "name": "Check File Hash",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4502f6fd-0a1d-4ab2-8c25-3fb2a84ad59d",
+              "leftValue": "={{ $json.already_processed }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        16
+      ],
+      "id": "1bf29755-5bdc-45c0-a3d8-421c18150263",
+      "name": "File Already Processed?"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "dce380bb-b199-4fc7-a98e-b3b1f5bf06a2",
+              "name": "run_id",
+              "value": "={{ 'RPA_' + $now.toFormat('yyyyMMdd_HHmmss') + '_' + $json.source_file_sha256.slice(0,8) }}",
+              "type": "string"
+            },
+            {
+              "id": "8481d187-2686-44a2-b286-2e85a8dbc972",
+              "name": "source_platform",
+              "value": "={{ $('Collector Run Config v1.0').first().json.source_platform }}",
+              "type": "string"
+            },
+            {
+              "id": "c374107c-44e4-4634-928b-ef88bc1a9a29",
+              "name": "source_name",
+              "value": "={{ $('Collector Run Config v1.0').first().json.source_name }}",
+              "type": "string"
+            },
+            {
+              "id": "691fea69-6f4c-4507-b717-3c0590c8db59",
+              "name": "status",
+              "value": "RUNNING",
+              "type": "string"
+            },
+            {
+              "id": "fc694eb4-1558-43e4-bfeb-7f86efaee4a3",
+              "name": "rpa_version",
+              "value": "rpa-v1.0",
+              "type": "string"
+            },
+            {
+              "id": "576275b9-6c8c-48e1-b5e7-7cb04aac579d",
+              "name": "loader_version",
+              "value": "loader-v1.0",
+              "type": "string"
+            },
+            {
+              "id": "6b973fdf-2438-4910-93bf-2b5c0aed6229",
+              "name": "query_shop_name",
+              "value": "={{ $('Collector Run Config v1.0').first().json.query_shop_name }}",
+              "type": "string"
+            },
+            {
+              "id": "d8e6507e-75b7-4abb-89e6-7ae5a2124bd9",
+              "name": "collection_scope",
+              "value": "={{ $('Collector Run Config v1.0').first().json.collection_scope }}",
+              "type": "string"
+            },
+            {
+              "id": "1cabacaf-1c49-49f8-8dc4-5f250eb51274",
+              "name": "run_slot",
+              "value": "={{ $('Collector Run Config v1.0').first().json.run_slot }}",
+              "type": "string"
+            },
+            {
+              "id": "4637f0ae-d60c-405c-8c95-ba9308bd58c7",
+              "name": "query_start_date",
+              "value": "={{ $('Collector Run Config v1.0').first().json.query_start_date }}",
+              "type": "string"
+            },
+            {
+              "id": "6d1a846c-854f-4c54-8c9f-de97ab081f5a",
+              "name": "query_end_date",
+              "value": "={{ $('Collector Run Config v1.0').first().json.query_end_date }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1136,
+        32
+      ],
+      "id": "1a332c15-b5b4-4965-af55-b952587f0049",
+      "name": "Prepare Collector Run"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO voc.collector_runs (\n    run_id,\n    source_platform,\n    source_name,\n    started_at,\n    status,\n\n    source_file_name,\n    source_file_path,\n    source_file_sha256,\n\n    rows_loaded,\n    rows_rejected,\n\n    rpa_version,\n    loader_version,\n\n    query_shop_name,\n    collection_scope,\n    run_slot,\n\n    query_start_date,\n    query_end_date\n)\nVALUES (\n    $1,\n    $2,\n    $3,\n    CURRENT_TIMESTAMP,\n    $4,\n\n    $5,\n    $6,\n    $7,\n\n    0,\n    0,\n\n    $8,\n    $9,\n\n    NULLIF($10, ''),\n    $11,\n    $12,\n\n    $13::date,\n    $14::date\n)\nRETURNING\n    run_id,\n    status,\n    started_at,\n\n    source_file_name,\n    source_file_path,\n    source_file_sha256,\n\n    query_shop_name,\n    collection_scope,\n    run_slot,\n\n    query_start_date,\n    query_end_date;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.run_id,\n  $json.source_platform,\n  $json.source_name,\n  $json.status,\n\n  $json.source_file_name,\n  $json.source_file_path,\n  $json.source_file_sha256,\n\n  $json.rpa_version,\n  $json.loader_version,\n\n  $json.query_shop_name ?? '',\n  $json.collection_scope,\n  $json.run_slot,\n\n  $json.query_start_date,\n  $json.query_end_date\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1328,
+        32
+      ],
+      "id": "e002d4f0-eb5f-4b37-b165-7ce19e29e6cf",
+      "name": "Create Collector Run",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.source_file_path }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        1488,
+        32
+      ],
+      "id": "492f1f2d-1004-4ad3-97e2-24deb70d6dbb",
+      "name": "Read Current File"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\n\nconst run = $('Create Collector Run').all(0, $runIndex)[0].json;\n\nreturn rows.map((item, index) => {\n  const raw = item.json;\n  const normalized = {};\n\n  for (const [key, value] of Object.entries(raw)) {\n    // 清理 CSV 第一列表头可能存在的 UTF-8 BOM，以及字段名前后空格\n    const cleanKey = key.replace(/^\\uFEFF/, '').trim();\n\n    if (typeof value === 'string') {\n      const cleanValue = value.trim();\n      normalized[cleanKey] = cleanValue === '' ? null : cleanValue;\n    } else {\n      normalized[cleanKey] = value;\n    }\n  }\n\n  // rating 显式转数字\n  if (normalized.rating !== null && normalized.rating !== undefined) {\n    normalized.rating = Number(normalized.rating);\n  }\n\n  // 提前阻止脏数据进入 PostgreSQL\n  if (!normalized.platform) {\n    throw new Error(\n      `第 ${index + 1} 行缺少 platform；原始字段名：${Object.keys(raw).join(', ')}`\n    );\n  }\n\n  return {\n    json: {\n      ...normalized,\n\n      collector_run_id: run.run_id,\n      source_row_no: index + 1,\n\n      source_file_name: run.source_file_name,\n      source_file_sha256: run.source_file_sha256,\n\n      source_row_json: JSON.stringify(raw),\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        320
+      ],
+      "id": "2f7ad640-1ddf-471a-b1d8-03d7514a6ece",
+      "name": "Prepare Staging Rows"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO voc.review_source_staging (\n    collector_run_id,\n    source_row_no,\n    platform,\n    shop_name,\n    item_id,\n    item_name,\n    sku_id,\n    sku_name,\n    order_id,\n    buyer_id,\n    review_id,\n    rating,\n    rating_label,\n    review_text,\n    review_time,\n    append_review_text,\n    append_review_time,\n    source_file_name,\n    source_file_sha256,\n    source_row_json\n)\nVALUES (\n    $1,\n    $2,\n    $3,\n    $4,\n    $5,\n    $6,\n    $7,\n    $8,\n    $9,\n    $10,\n    $11,\n    $12,\n    $13,\n    $14,\n    $15,\n    $16,\n    $17,\n    $18,\n    $19,\n    $20::jsonb\n)\nRETURNING\n    staging_id,\n    collector_run_id,\n    source_row_no,\n    review_id,\n    processing_status;",
+        "options": {
+          "queryReplacement": "={{ [   $json.collector_run_id,   $json.source_row_no,   $json.platform,   $json.shop_name,   $json.item_id,   $json.item_name,   $json.sku_id,   $json.sku_name,   $json.order_id,   $json.buyer_id,   $json.review_id,   $json.rating,   $json.rating_label,   $json.review_text,   $json.review_time,   $json.append_review_text,   $json.append_review_time,   $json.source_file_name,   $json.source_file_sha256,   $json.source_row_json ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1136,
+        320
+      ],
+      "id": "2ff1a5cf-d79a-4109-b8da-5a67e5abba17",
+      "name": "Insert Staging Rows",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nif (items.length === 0) {\n  throw new Error('没有任何 Staging 行写入，无法将采集任务标记为 SUCCESS');\n}\n\nconst runId = items[0].json.collector_run_id;\n\nreturn [\n  {\n    json: {\n      run_id: runId,\n      rows_loaded: items.length\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        320
+      ],
+      "id": "c2c34803-9ab3-435a-baa3-dc06e4705b79",
+      "name": "Summarize Load Result"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.collector_runs\nSET\n    status = 'SUCCESS',\n    finished_at = CURRENT_TIMESTAMP,\n    rows_loaded = $2,\n    rows_rejected = 0,\n    error_stage = NULL,\n    error_message = NULL\nWHERE run_id = $1\nRETURNING\n    run_id,\n    status,\n    rows_loaded,\n    rows_rejected,\n    started_at,\n    finished_at,\n    source_file_name,\n    source_file_sha256;",
+        "options": {
+          "queryReplacement": "={{ [\n  $json.run_id,\n  $json.rows_loaded\n] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1568,
+        320
+      ],
+      "id": "ab3c0406-8d1a-40ef-9aeb-703b43411728",
+      "name": "Mark Collector Success",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json ?? {};\n\nconst payload =\n  input.body && typeof input.body === 'object'\n    ? input.body\n    : input;\n\nconst requiredFields = [\n  'source_name',\n  'source_platform',\n  'collection_scope',\n  'run_slot',\n  'query_start_date',\n  'query_end_date',\n  'file_name',\n];\n\nfor (const field of requiredFields) {\n  if (\n    payload[field] === undefined ||\n    payload[field] === null ||\n    String(payload[field]).trim() === ''\n  ) {\n    throw new Error(`${field} is required`);\n  }\n}\n\nconst fileName = String(payload.file_name).trim();\n\nif (\n  fileName.includes('/') ||\n  fileName.includes('\\\\') ||\n  !fileName.toLowerCase().endsWith('.csv')\n) {\n  throw new Error('invalid file_name');\n}\n\nconst datePattern = /^\\d{4}-\\d{2}-\\d{2}$/;\n\nif (!datePattern.test(payload.query_start_date)) {\n  throw new Error('invalid query_start_date');\n}\n\nif (!datePattern.test(payload.query_end_date)) {\n  throw new Error('invalid query_end_date');\n}\n\nconst runSlot = String(payload.run_slot).toUpperCase();\n\nif (!['MORNING', 'AFTERNOON'].includes(runSlot)) {\n  throw new Error('invalid run_slot');\n}\n\nreturn [\n  {\n    json: {\n      source_name: String(payload.source_name).trim(),\n      source_platform: String(payload.source_platform).trim(),\n\n      query_shop_name:\n        payload.query_shop_name &&\n        String(payload.query_shop_name).trim() !== ''\n          ? String(payload.query_shop_name).trim()\n          : null,\n\n      collection_scope: String(payload.collection_scope).trim().toUpperCase(),\n\n      timezone: payload.timezone || 'Asia/Shanghai',\n      run_slot: runSlot,\n\n      query_start_date: payload.query_start_date,\n      query_end_date: payload.query_end_date,\n\n      file_name: fileName,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -112,
+        0
+      ],
+      "id": "af1d2e76-32f7-44f5-9c8b-b287f0472c91",
+      "name": "Collector Run Config v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH params AS (\n    SELECT\n        $1::varchar AS source_name,\n        $2::varchar AS source_platform,\n        NULLIF($3::varchar, '') AS query_shop_name,\n        $4::varchar AS collection_scope,\n        $5::timestamptz AS requested_end_ts,\n        $6::integer AS overlap_minutes\n),\n\nlast_watermark AS (\n    SELECT\n        MAX(cr.query_end_ts) AS watermark\n    FROM voc.collector_runs cr\n    CROSS JOIN params p\n    WHERE cr.status = 'SUCCESS'\n      AND cr.query_end_ts IS NOT NULL\n      AND cr.collection_scope = 'INCREMENTAL'\n      AND cr.source_name = p.source_name\n      AND cr.source_platform = p.source_platform\n      AND COALESCE(cr.query_shop_name, '__ALL__')\n          =\n          COALESCE(p.query_shop_name, '__ALL__')\n)\n\nSELECT\n    p.source_name,\n    p.source_platform,\n    p.query_shop_name,\n    p.collection_scope,\n\n    lw.watermark AS previous_watermark,\n\n    CASE\n        WHEN lw.watermark IS NULL\n        THEN date_trunc(\n            'day',\n            p.requested_end_ts AT TIME ZONE 'Asia/Shanghai'\n        ) AT TIME ZONE 'Asia/Shanghai'\n\n        ELSE\n            lw.watermark\n            - make_interval(mins => p.overlap_minutes)\n    END AS query_start_ts,\n\n    p.requested_end_ts AS query_end_ts,\n\n    p.overlap_minutes,\n\n    CASE\n        WHEN lw.watermark IS NULL\n        THEN 'FIRST_RUN_TODAY_00'\n        ELSE 'WATERMARK_WITH_OVERLAP'\n    END AS window_reason\n\nFROM params p\nCROSS JOIN last_watermark lw;",
+        "options": {
+          "queryReplacement": "={{ [   $json.source_name,   $json.source_platform,   $json.query_shop_name ?? '',   $json.collection_scope,   $json.requested_end_ts,   $json.overlap_minutes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -144,
+        720
+      ],
+      "id": "2dda93a2-9958-43b9-891b-a3573f7c7e1d",
+      "name": "Resolve Collection Window v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    run_id,\n    source_name,\n    source_platform,\n    query_shop_name,\n    collection_scope,\n    status,\n    rows_loaded,\n    query_start_date,\n    query_end_date,\n    query_start_ts,\n    query_end_ts,\n    source_file_name\nFROM voc.collector_runs\nWHERE run_id = 'RPA_20261009_161936_e5a51d4c';",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        0,
+        720
+      ],
+      "id": "9ebfd80a-0abd-4cf8-87d5-f53220750e11",
+      "name": "Verify Collector Watermark v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -384,
+        96
+      ],
+      "id": "d3d5c614-1ba0-408d-8412-a61c97bcd040",
+      "name": "Called by Orchestrator v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst rows = items.map(item => item.json ?? {});\n\nconst alreadyProcessedCount = rows.filter(\n  row => row.already_processed === true\n).length;\n\nreturn [\n  {\n    json: {\n      workflow: 'VOC_00_CSVLoader_v1',\n      status: 'SUCCESS',\n\n      input_item_count: items.length,\n      already_processed_count: alreadyProcessedCount,\n\n      // 即使这一次没有新文件，也继续跑下游。\n      // 因为 VOC_01 / VOC_02 可能还有上一次留下的 pending 数据需要恢复处理。\n      continue_pipeline: true,\n\n      completed_at: new Date().toISOString()\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        -192
+      ],
+      "id": "0e97331d-0d67-4774-9d1e-dfae44acf24c",
+      "name": "Build VOC_00 Completion v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Collector Run Config v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read/Write Files from Disk": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Build VOC_00 Completion v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crypto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "Prepare Staging Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crypto": {
+      "main": [
+        [
+          {
+            "node": "Check File Hash",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check File Hash": {
+      "main": [
+        [
+          {
+            "node": "File Already Processed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Already Processed?": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Collector Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Collector Run": {
+      "main": [
+        [
+          {
+            "node": "Create Collector Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Collector Run": {
+      "main": [
+        [
+          {
+            "node": "Read Current File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Current File": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Staging Rows": {
+      "main": [
+        [
+          {
+            "node": "Insert Staging Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Staging Rows": {
+      "main": [
+        [
+          {
+            "node": "Summarize Load Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Load Result": {
+      "main": [
+        [
+          {
+            "node": "Mark Collector Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Collector Success": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collector Run Config v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Collection Window v1.0": {
+      "main": [
+        []
+      ]
+    },
+    "Called by Orchestrator v1.0": {
+      "main": [
+        [
+          {
+            "node": "Collector Run Config v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "66887e28-4885-49ef-b682-2224419b4fd4",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "l5vEW8e0W1p2JgSX",
+  "tags": []
+}

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 商家工作台 Demo</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-body">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-head">
+        <span class="brand-mark big">商</span>
+        <h1 id="login-title" data-testid="login-title">商家工作台 Demo</h1>
+        <p class="login-sub">本地仿真环境 · 仅供 RPA 自动化测试使用</p>
+      </div>
+
+      {% if error %}
+      <div class="alert alert-error" id="login-error" data-testid="login-error">{{ error }}</div>
+      {% endif %}
+
+      <form method="post" action="{{ url_for('login') }}" id="login-form" data-testid="login-form">
+        <div class="field">
+          <label for="login-username">账号</label>
+          <input type="text" id="login-username" name="username" data-testid="login-username"
+                 autocomplete="username" placeholder="demo_admin" value="{{ username or '' }}">
+        </div>
+        <div class="field">
+          <label for="login-password">密码</label>
+          <input type="password" id="login-password" name="password" data-testid="login-password"
+                 autocomplete="current-password" placeholder="123456">
+        </div>
+        <button type="submit" class="btn btn-primary btn-block" id="login-submit" data-testid="login-submit">登 录</button>
+      </form>
+
+      <div class="login-tip">
+        <div>测试账号：<code>demo_admin</code></div>
+        <div>测试密码：<code>123456</code></div>
+      </div>
+      <div class="login-foot">
+        本 Demo 不接入任何真实平台账号体系，不含真实商家与消费者数据。
+      </div>
+    </div>
+  </div>
+</body>
+</html>

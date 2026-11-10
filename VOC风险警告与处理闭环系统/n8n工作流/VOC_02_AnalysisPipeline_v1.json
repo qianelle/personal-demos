@@ -1,0 +1,785 @@
+{
+  "name": "VOC_02_AnalysisPipeline_v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1152,
+        224
+      ],
+      "id": "0b9539f0-c58c-493e-9713-0b49ed96e87b",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Normalize Text v1.0\n// 文本标准化层\n//\n// 职责：\n// 1. 保留原始 content_text\n// 2. 生成 normalized_text\n// 3. 清理格式噪声\n// 4. 识别常见拼音 / 英文别名\n//\n// 不负责：\n// - 风险判断\n// - P0/P1/P2/P3\n// - 情感分类\n// - AI 调用\n// ============================================================\n\nconst items = $input.all();\n\nconst NORMALIZATION_VERSION = 'normalize-v1.0';\n\n\n// ============================================================\n// 1. Alias Dictionary（别名字典）\n//\n// 注意：\n// 这里只“检测”这些表达。\n// V1 不直接把它们替换成中文，避免代码过度理解语义。\n// ============================================================\n\nconst ALIAS_PATTERNS = [\n  {\n    type: 'PINYIN_ALIAS',\n    canonical: '恶心',\n    regex: /\\be\\s*xin\\b/gi,\n  },\n  {\n    type: 'PINYIN_ALIAS',\n    canonical: '头晕',\n    regex: /\\btou\\s*yun\\b/gi,\n  },\n  {\n    type: 'PINYIN_ALIAS',\n    canonical: '过敏',\n    regex: /\\bguo\\s*min\\b/gi,\n  },\n  {\n    type: 'PINYIN_ALIAS',\n    canonical: '拉肚子',\n    regex: /\\bla\\s*du\\s*zi\\b/gi,\n  },\n  {\n    type: 'PINYIN_ALIAS',\n    canonical: '假货',\n    regex: /\\bjia\\s*huo\\b/gi,\n  },\n\n  // 当前测试数据中存在：\n  // “seal 好像已经开过了”\n  {\n    type: 'ENGLISH_ALIAS',\n    canonical: '密封',\n    regex: /\\bseal\\b/gi,\n  },\n];\n\n\n// ============================================================\n// 2. Targeted Traditional Map\n//    （高价值繁体字定向映射）\n//\n// 我们没有在 Code Node 中安装完整繁简转换库。\n// 所以这里只处理 VOC 风险领域常见、语义明确的少量词。\n//\n// 这不是完整繁简转换器。\n// ============================================================\n\nconst TRADITIONAL_MAP = {\n  '過敏': '过敏',\n  '頭暈': '头晕',\n  '噁心': '恶心',\n  '腹瀉': '腹泻',\n  '發霉': '发霉',\n  '異物': '异物',\n  '變質': '变质',\n  '服務': '服务',\n  '物流': '物流',\n};\n\n\n// ============================================================\n// 3. 工具函数\n// ============================================================\n\nfunction cleanOriginal(value) {\n\n  if (value === undefined || value === null) {\n    return null;\n  }\n\n  const text = String(value);\n\n  if (text.trim() === '') {\n    return null;\n  }\n\n  return text;\n}\n\n\nfunction addFlag(flags, flag) {\n\n  if (!flags.includes(flag)) {\n    flags.push(flag);\n  }\n\n}\n\n\nfunction applyTraditionalMap(text, flags) {\n\n  let result = text;\n\n  for (const [traditional, simplified] of Object.entries(TRADITIONAL_MAP)) {\n\n    if (result.includes(traditional)) {\n      result = result.split(traditional).join(simplified);\n\n      addFlag(\n        flags,\n        'TARGETED_TRADITIONAL_NORMALIZED'\n      );\n    }\n  }\n\n  return result;\n}\n\n\n// ============================================================\n// 4. Structural Normalization\n//    （结构标准化）\n//\n// 只清理格式，不做风险判断。\n// ============================================================\n\nfunction normalizeStructure(originalText) {\n\n  if (originalText === null) {\n    return {\n      normalizedText: null,\n      flags: ['EMPTY_TEXT'],\n    };\n  }\n\n  let text = originalText;\n  const flags = [];\n\n\n  // ----------------------------------------------------------\n  // 4.1 Unicode NFKC\n  //\n  // NFKC：\n  // Unicode Compatibility Normalization\n  // （Unicode兼容标准化）\n  //\n  // 主要可以把：\n  // 全角英文 / 数字等\n  // 转成更统一的形式。\n  //\n  // 例如：\n  // ＡＢＣ → ABC\n  // １２３ → 123\n  // ----------------------------------------------------------\n\n  let before = text;\n\n  text = text.normalize('NFKC');\n\n  if (text !== before) {\n    addFlag(flags, 'UNICODE_NFKC_NORMALIZED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.2 去除 Zero-width Characters\n  //     （零宽字符）\n  //\n  // 有些复制文本里肉眼看不到，但会影响关键词匹配。\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text.replace(\n    /[\\u200B-\\u200D\\uFEFF]/g,\n    ''\n  );\n\n  if (text !== before) {\n    addFlag(flags, 'ZERO_WIDTH_CHAR_REMOVED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.3 常见 HTML 空格\n  //\n  // &nbsp;\n  // &#160;\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text.replace(\n    /(?:&nbsp;|&#160;)/gi,\n    ' '\n  );\n\n  if (text !== before) {\n    addFlag(flags, 'HTML_SPACE_NORMALIZED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.4 换行统一为空格\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text\n    .replace(/\\r\\n?/g, '\\n')\n    .replace(/\\n+/g, ' ');\n\n  if (text !== before) {\n    addFlag(flags, 'LINE_BREAK_NORMALIZED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.5 Tab 等空白统一\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text.replace(\n    /[\\t\\f\\v]+/g,\n    ' '\n  );\n\n  if (text !== before) {\n    addFlag(flags, 'WHITESPACE_NORMALIZED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.6 多个连续空格 → 一个空格\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  if (text !== before) {\n    addFlag(flags, 'WHITESPACE_COLLAPSED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.7 去掉中文字符之间不自然的空格\n  //\n  // 示例：\n  // 吃 完 以后\n  // →\n  // 吃完以后\n  //\n  // 但：\n  // tou yun\n  //\n  // 会保留，因为它是拉丁字母。\n  // ----------------------------------------------------------\n\n  before = text;\n\n  let previousText;\n\n  do {\n\n    previousText = text;\n\n    text = text.replace(\n      /([\\u3400-\\u9FFF])\\s+(?=[\\u3400-\\u9FFF])/g,\n      '$1'\n    );\n\n  } while (text !== previousText);\n\n  if (text !== before) {\n    addFlag(flags, 'CJK_SPACE_REMOVED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.8 清理标点两侧多余空格\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text.replace(\n    /\\s*([，。！？；：、,.!?;:])\\s*/g,\n    '$1'\n  );\n\n  if (text !== before) {\n    addFlag(flags, 'PUNCTUATION_SPACE_NORMALIZED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.9 英文字母统一小写\n  //\n  // ExIn\n  // →\n  // exin\n  //\n  // 中文不会受影响。\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text.toLowerCase();\n\n  if (text !== before) {\n    addFlag(flags, 'LATIN_LOWERCASED');\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.10 重复标点压缩\n  //\n  // ！！！ → ！\n  // ???   → ?\n  // 。。。 → 。\n  //\n  // 注意：\n  // 原始 content_text 仍然保留，\n  // 所以不会丢失原始表达。\n  // ----------------------------------------------------------\n\n  before = text;\n\n  text = text\n    .replace(/！{2,}/g, '！')\n    .replace(/!{2,}/g, '!')\n    .replace(/？{2,}/g, '？')\n    .replace(/\\?{2,}/g, '?')\n    .replace(/。{2,}/g, '。')\n    .replace(/，{2,}/g, '，')\n    .replace(/,{2,}/g, ',');\n\n  if (text !== before) {\n    addFlag(\n      flags,\n      'REPEATED_PUNCTUATION_COLLAPSED'\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // 4.11 高价值繁体词定向转换\n  // ----------------------------------------------------------\n\n  text = applyTraditionalMap(\n    text,\n    flags\n  );\n\n\n  return {\n    normalizedText: text,\n    flags,\n  };\n}\n\n\n// ============================================================\n// 5. Alias Detection\n//    （别名检测）\n//\n// 例如：\n// tou yun\n// exin\n// guomin\n// seal\n//\n// 这里只告诉后面的 Rule Engine：\n// “我发现了这个可能的表达。”\n//\n// 不直接判风险。\n// ============================================================\n\nfunction detectAliases(text) {\n\n  if (!text) {\n    return [];\n  }\n\n  const detected = [];\n\n  for (const alias of ALIAS_PATTERNS) {\n\n    const matches = text.match(alias.regex);\n\n    if (!matches || matches.length === 0) {\n      continue;\n    }\n\n    detected.push({\n      type: alias.type,\n\n      matched: [\n        ...new Set(matches)\n      ],\n\n      canonical: alias.canonical,\n    });\n  }\n\n  return detected;\n}\n\n\n// ============================================================\n// 6. 主处理逻辑\n// ============================================================\n\nconst output = [];\n\nfor (const item of items) {\n\n  const row = item.json;\n\n  const originalText =\n    cleanOriginal(row.content_text);\n\n  const {\n    normalizedText,\n    flags,\n  } = normalizeStructure(originalText);\n\n  const detectedAliases =\n    detectAliases(normalizedText);\n\n\n  // 如果检测到拼音 Alias（别名）\n  if (\n    detectedAliases.some(\n      alias => alias.type === 'PINYIN_ALIAS'\n    )\n  ) {\n    addFlag(\n      flags,\n      'PINYIN_ALIAS_DETECTED'\n    );\n  }\n\n\n  // 如果检测到英文 Alias\n  if (\n    detectedAliases.some(\n      alias => alias.type === 'ENGLISH_ALIAS'\n    )\n  ) {\n    addFlag(\n      flags,\n      'ENGLISH_ALIAS_DETECTED'\n    );\n  }\n\n\n  output.push({\n    json: {\n\n      // 保留前面 Mapper 的所有字段\n      ...row,\n\n      // 以下字段只是 n8n 工作流内部使用\n      normalized_text: normalizedText,\n\n      normalization_version:\n        NORMALIZATION_VERSION,\n\n      normalization_changed:\n        normalizedText !== originalText,\n\n      normalization_flags:\n        flags,\n\n      detected_aliases:\n        detectedAliases,\n    }\n  });\n}\n\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -784,
+        224
+      ],
+      "id": "25f07496-2b5c-4af7-ba1f-5db02c440e0d",
+      "name": "Normalize Text v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Rule Engine v1.0\n// rules-supplement-v1.0\n//\n// 职责：\n// 1. 根据 normalized_text 执行确定性业务规则\n// 2. 输出 rule_hit / rule_tags / rule_risk_level / need_ai\n// 3. 区分 NONE 与 UNKNOWN\n// 4. 处理否定语境\n// 5. 处理评分与文本冲突\n// 6. 支持少量 Thread Context（评价线程上下文）\n//\n// 当前不负责：\n// - 调用 Dify\n// - 生成 AI 结果\n// - Final Decision\n// - 写飞书\n// ============================================================\n\nconst items = $input.all();\n\nconst RULES_VERSION = 'rules-supplement-v1.0';\n\nconst RISK_SCORE = {\n  P0: 4,\n  P1: 3,\n  P2: 2,\n  P3: 1,\n  NONE: 0,\n};\n\n\n// ============================================================\n// 1. 基础工具函数\n// ============================================================\n\nfunction pushUnique(array, value) {\n  if (!array.includes(value)) {\n    array.push(value);\n  }\n}\n\n\nfunction textOf(row) {\n  return String(\n    row.normalized_text ??\n    row.content_text ??\n    ''\n  ).trim();\n}\n\n\nfunction isEmpty(value) {\n  return (\n    value === null ||\n    value === undefined ||\n    String(value).trim() === ''\n  );\n}\n\n\nfunction numberOrNull(value) {\n  if (isEmpty(value)) {\n    return null;\n  }\n\n  const number = Number(value);\n\n  return Number.isFinite(number)\n    ? number\n    : null;\n}\n\n\nfunction getAliasCanonicals(row) {\n  if (!Array.isArray(row.detected_aliases)) {\n    return [];\n  }\n\n  return row.detected_aliases\n    .map(item => item?.canonical)\n    .filter(Boolean);\n}\n\n\n// ============================================================\n// 2. 单条内容规则判断\n// ============================================================\n\nfunction evaluateItem(row) {\n\n  const text = textOf(row);\n\n  // ----------------------------------------------------------\n  // SELLER_REPLY（商家回复）\n  //\n  // RAW 中保留商家回复用于线程和审计，\n  // 但它不是消费者 VOC，因此当前 MVP 不进入风险分析。\n  // ----------------------------------------------------------\n\n  if (row.content_type === 'SELLER_REPLY') {\n\n    return {\n      analysis_scope: 'OUT_OF_SCOPE',\n      skip_reason: 'SELLER_REPLY_NOT_CONSUMER_VOC',\n\n      rules_version: RULES_VERSION,\n\n      rule_hit: false,\n      rule_tags: [],\n\n      rule_risk_level: null,\n\n      // n8n 内部临时字段\n      rule_decision: 'SKIPPED',\n\n      need_ai: false,\n\n      rule_category: null,\n      matched_rule_ids: [],\n      hard_risk_hit: false,\n\n      rule_reason:\n        '商家回复属于商家侧内容，当前 MVP 不进入消费者 VOC 风险分析。',\n\n      _rule_internal: {\n        risk_hits: [],\n        data_quality_tags: [],\n      },\n    };\n  }\n\n\n  // ==========================================================\n  // 3. 初始化\n  // ==========================================================\n\n  const businessTags = [];\n  const metaTags = [];\n  const dataQualityTags = [];\n\n  const riskHits = [];\n  const matchedRuleIds = [];\n\n  let needAi = false;\n\n\n  function addRiskHit({\n    id,\n    tag,\n    risk,\n    category,\n    issueKey,\n    hardRisk = false,\n  }) {\n\n    pushUnique(businessTags, tag);\n    pushUnique(matchedRuleIds, id);\n\n    riskHits.push({\n      id,\n      tag,\n      risk,\n      category,\n      issueKey,\n      hardRisk,\n    });\n  }\n\n\n  // ==========================================================\n  // 4. Data Quality Rules（数据质量规则）\n  //\n  // 注意：\n  // 数据缺失不是消费者风险。\n  // 这里只打 Tag（标签），不提高风险等级。\n  // ==========================================================\n\n  const isBuyerContent = [\n    'INITIAL_REVIEW',\n    'FOLLOWUP_REVIEW',\n    'BUYER_REPLY',\n  ].includes(row.content_type);\n\n\n  if (isBuyerContent) {\n\n    if (isEmpty(row.sku_id)) {\n      pushUnique(\n        dataQualityTags,\n        'MISSING_SKU'\n      );\n    }\n\n    if (isEmpty(row.service_rating)) {\n      pushUnique(\n        dataQualityTags,\n        'MISSING_SERVICE_RATING'\n      );\n    }\n\n    if (isEmpty(row.logistics_rating)) {\n      pushUnique(\n        dataQualityTags,\n        'MISSING_LOGISTICS_RATING'\n      );\n    }\n  }\n\n\n  // ==========================================================\n  // 5. Negation Context（否定语境）\n  //\n  // 例如：\n  // “没有出现漏液”\n  // “担心过敏，但没有不舒服”\n  //\n  // 不能因为出现“漏液”“过敏”就误报。\n  // ==========================================================\n\n  const hasNegationContext =\n    /没有出现漏液/.test(text) ||\n    /本来担心会过敏.*没有不舒服/.test(text) ||\n    /没有破损/.test(text) ||\n    /密封膜(?:是)?完整/.test(text) ||\n    /没有出现恶心或者拉肚子/.test(text) ||\n    /没有出现(?:恶心|拉肚子)/.test(text);\n\n\n  if (hasNegationContext) {\n    pushUnique(\n      metaTags,\n      'NEGATION_CONTEXT'\n    );\n  }\n\n\n  // ==========================================================\n  // 6. P0 — 产品安全 / 身体不适\n  // ==========================================================\n\n\n  // ----------------------------------------------------------\n  // P0：胃部不适\n  // ----------------------------------------------------------\n\n  if (\n    /胃(?:一直)?不太舒服|胃不舒服|胃疼|胃痛/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_STOMACH_DISCOMFORT',\n      tag: 'STOMACH_DISCOMFORT',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'HEALTH',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // P0：恶心 / 想吐\n  //\n  // 要求同时存在消费使用语境，\n  // 避免“看到虫子太恶心了”被理解成身体症状。\n  // ----------------------------------------------------------\n\n  const hasUseContext =\n    /吃了|吃完|服用|喝了|喝完|使用后|吃完以后|吃完当天/.test(text);\n\n\n  const nauseaNegated =\n    /没有出现[^。！？，,]*(?:恶心|想吐)/.test(text) ||\n    /没有(?:恶心|想吐)/.test(text);\n\n\n  const disgustContext =\n    /发霉|虫子|虫卵|异物|黑色的东西/.test(text) &&\n    /太恶心/.test(text);\n\n\n  if (\n    /恶心|想吐/.test(text) &&\n    hasUseContext &&\n    !nauseaNegated &&\n    !disgustContext\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_NAUSEA',\n      tag: 'NAUSEA',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'HEALTH',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // P0：头晕\n  // ----------------------------------------------------------\n\n  if (\n    /头晕|会晕一下|站起来[^。！？，,]*晕/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_DIZZY',\n      tag: 'DIZZY',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'HEALTH',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // P0：腹泻 / 拉肚子\n  // ----------------------------------------------------------\n\n  const diarrheaNegated =\n    /没有出现[^。！？，,]*拉肚子/.test(text) ||\n    /没有拉肚子/.test(text);\n\n\n  if (\n    /拉肚子|腹泻/.test(text) &&\n    hasUseContext &&\n    !diarrheaNegated\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_DIARRHEA',\n      tag: 'DIARRHEA',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'HEALTH',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // P0：红疹 / 疑似过敏表现\n  // ----------------------------------------------------------\n\n  if (\n    /红疹|起疹|一片一片的很痒/.test(text) &&\n    hasUseContext\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_ALLERGY_RASH',\n      tag: 'ALLERGY_RASH',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'HEALTH',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // P0：发霉 / 异物 / 虫子\n  // ----------------------------------------------------------\n\n  if (\n    /发霉|虫子|虫卵|异物|黑色的东西/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P0_MOLD_FOREIGN_OBJECT',\n      tag: 'MOLD_FOREIGN_OBJECT',\n      risk: 'P0',\n      category: '产品安全',\n      issueKey: 'QUALITY_SAFETY',\n      hardRisk: true,\n    });\n  }\n\n\n  // ==========================================================\n  // 7. P1 — 真伪 / 包装完整性 / 严重质量\n  // ==========================================================\n\n\n  // ----------------------------------------------------------\n  // 防伪码异常\n  // ----------------------------------------------------------\n\n  if (\n    /防伪码[^。！？，,]*(?:查不出来|异常)/.test(text) ||\n    /扫了[^。！？，,]*显示异常/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P1_ANTIFRAUD_CODE',\n      tag: 'ANTIFRAUD_CODE_ABNORMAL',\n      risk: 'P1',\n      category: '真伪/资质',\n      issueKey: 'AUTHENTICITY',\n      hardRisk: false,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // 强真伪质疑\n  // ----------------------------------------------------------\n\n  const strongAuthenticityDoubt =\n    /(?:很)?怀疑(?:是不是|不是)?正品/.test(text) ||\n    /怀疑不是正品/.test(text) ||\n    /假货/.test(text);\n\n\n  // ----------------------------------------------------------\n  // 弱真伪质疑\n  //\n  // “不知道是不是正品”\n  // 不能由代码强行定为 P1。\n  // ----------------------------------------------------------\n\n  const weakAuthenticityDoubt =\n    /不知道是不是正品/.test(text) &&\n    !strongAuthenticityDoubt;\n\n\n  if (strongAuthenticityDoubt) {\n\n    addRiskHit({\n      id: 'R_P1_AUTHENTICITY_DOUBT',\n      tag: 'AUTHENTICITY_DOUBT',\n      risk: 'P1',\n      category: '真伪/资质',\n      issueKey: 'AUTHENTICITY',\n      hardRisk: false,\n    });\n\n    needAi = true;\n  }\n\n\n  if (weakAuthenticityDoubt) {\n\n    pushUnique(\n      businessTags,\n      'AUTHENTICITY_DOUBT_WEAK'\n    );\n\n    pushUnique(\n      matchedRuleIds,\n      'R_UNKNOWN_AUTHENTICITY_WEAK'\n    );\n\n    needAi = true;\n  }\n\n\n  // ----------------------------------------------------------\n  // 密封膜缺失 / 松动\n  //\n  // 注意：\n  // “没有密封膜”本身就是风险，\n  // 不能被普通否定规则误杀。\n  // ----------------------------------------------------------\n\n  if (\n    /没有密封膜|无密封膜/.test(text) ||\n    /密封膜[^。！？，,]*(?:松|破)/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P1_SEAL_MISSING',\n      tag: 'SEAL_MISSING',\n      risk: 'P1',\n      category: '产品质量',\n      issueKey: 'PACKAGING_INTEGRITY',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // 疑似拆封\n  // ----------------------------------------------------------\n\n  if (\n    /像被拆开过/.test(text) ||\n    /开过了/.test(text) ||\n    /胶带是重新贴的/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P1_PACKAGE_OPENED',\n      tag: 'PACKAGE_OPENED',\n      risk: 'P1',\n      category: '产品质量',\n      issueKey: 'PACKAGING_INTEGRITY',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // 临期\n  // ----------------------------------------------------------\n\n  if (\n    /临期/.test(text) ||\n    /只剩半年不到/.test(text) ||\n    /剩半年不到/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P1_NEAR_EXPIRY',\n      tag: 'NEAR_EXPIRY',\n      risk: 'P1',\n      category: '产品质量',\n      issueKey: 'EXPIRY',\n      hardRisk: true,\n    });\n  }\n\n\n  // ----------------------------------------------------------\n  // 严重漏液\n  // ----------------------------------------------------------\n\n  const leakageNegated =\n    /没有出现漏液/.test(text) ||\n    /没有漏液/.test(text) ||\n    /没漏液/.test(text);\n\n\n  if (\n    (\n      /漏液/.test(text) ||\n      /渗出来/.test(text) ||\n      /漏得很严重/.test(text) ||\n      /瓶身全是油/.test(text)\n    ) &&\n    !leakageNegated\n  ) {\n\n    addRiskHit({\n      id: 'R_P1_LEAKAGE',\n      tag: 'LEAKAGE',\n      risk: 'P1',\n      category: '产品质量',\n      issueKey: 'PACKAGING_INTEGRITY',\n      hardRisk: true,\n    });\n  }\n\n\n  // ==========================================================\n  // 8. P2 — 普通明确负面\n  // ==========================================================\n\n\n  // 顺序有意保持：\n  // TASTE_BAD → SWEET → SOUR → BITTER\n  // 方便测试结果稳定。\n\n\n  if (/难吃|难喝/.test(text)) {\n\n    addRiskHit({\n      id: 'R_P2_TASTE_BAD',\n      tag: 'TASTE_BAD',\n      risk: 'P2',\n      category: '口感体验',\n      issueKey: 'TASTE',\n    });\n  }\n\n\n  if (\n    /太甜/.test(text) ||\n    /甜得有点齁/.test(text) ||\n    /甜得[^。！？，,]*腻/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P2_TASTE_TOO_SWEET',\n      tag: 'TASTE_TOO_SWEET',\n      risk: 'P2',\n      category: '口感体验',\n      issueKey: 'TASTE',\n    });\n  }\n\n\n  if (/太酸|有点酸/.test(text)) {\n\n    addRiskHit({\n      id: 'R_P2_TASTE_TOO_SOUR',\n      tag: 'TASTE_TOO_SOUR',\n      risk: 'P2',\n      category: '口感体验',\n      issueKey: 'TASTE',\n    });\n  }\n\n\n  if (/有点苦|太苦/.test(text)) {\n\n    addRiskHit({\n      id: 'R_P2_TASTE_BITTER',\n      tag: 'TASTE_BITTER',\n      risk: 'P2',\n      category: '口感体验',\n      issueKey: 'TASTE',\n    });\n  }\n\n\n  // “没啥感觉”\n  if (/没啥感觉/.test(text)) {\n\n    addRiskHit({\n      id: 'R_P2_NO_EFFECT',\n      tag: 'NO_EFFECT',\n      risk: 'P2',\n      category: '功效预期',\n      issueKey: 'EFFECT',\n    });\n  }\n\n\n  // “效果一般 / 一点感觉都没有”\n  if (\n    /效果一般/.test(text) ||\n    /一点感觉都没有/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P2_EFFECT_WEAK',\n      tag: 'EFFECT_WEAK',\n      risk: 'P2',\n      category: '功效预期',\n      issueKey: 'EFFECT',\n    });\n  }\n\n\n  if (\n    /物流太慢/.test(text) ||\n    /物流还慢/.test(text) ||\n    /下单一周才到/.test(text) ||\n    /等了五天/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P2_LOGISTICS_SLOW',\n      tag: 'LOGISTICS_SLOW',\n      risk: 'P2',\n      category: '物流问题',\n      issueKey: 'LOGISTICS',\n    });\n  }\n\n\n  if (\n    /客服回复[^。！？，,]*慢/.test(text) ||\n    /问了三天才回/.test(text) ||\n    /客服电话[^。！？，,]*没人接/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P2_SERVICE_SLOW',\n      tag: 'SERVICE_SLOW',\n      risk: 'P2',\n      category: '客服服务',\n      issueKey: 'SERVICE',\n    });\n  }\n\n\n  // 真伪怀疑中的“味道异常”\n  // 这里将其视为 AUTHENTICITY 的支持证据，\n  // 不单独制造 MULTI_ISSUE。\n  if (\n    /味道和上次买的明显不一样/.test(text) ||\n    /甜得发苦/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P2_TASTE_ABNORMAL',\n      tag: 'TASTE_ABNORMAL',\n      risk: 'P2',\n      category: '口感体验',\n\n      // 与真伪问题归入同一个 issueKey\n      issueKey: 'AUTHENTICITY',\n    });\n  }\n\n\n  // ==========================================================\n  // 9. P3 — 建议型内容\n  // ==========================================================\n\n  if (\n    /小包装/.test(text) ||\n    /瓶口设计小一点/.test(text) ||\n    /独立小袋装/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P3_SUGGESTION_PACKAGING',\n      tag: 'SUGGESTION_PACKAGING',\n      risk: 'P3',\n      category: '包装问题',\n      issueKey: 'SUGGESTION_PACKAGING',\n    });\n  }\n\n\n  if (\n    /巧克力味/.test(text) ||\n    /其他口味/.test(text) ||\n    /增加口味/.test(text)\n  ) {\n\n    addRiskHit({\n      id: 'R_P3_SUGGESTION_FLAVOR',\n      tag: 'SUGGESTION_FLAVOR',\n      risk: 'P3',\n      category: '口感体验',\n      issueKey: 'SUGGESTION_FLAVOR',\n    });\n  }\n\n\n  // ==========================================================\n  // 10. Multi Issue（多问题）\n  //\n  // 同一句里出现两个真正不同的业务问题。\n  // ==========================================================\n\n  const distinctIssueKeys = new Set(\n    riskHits.map(hit => hit.issueKey)\n  );\n\n\n  if (distinctIssueKeys.size >= 2) {\n\n    pushUnique(\n      metaTags,\n      'MULTI_ISSUE'\n    );\n  }\n\n\n  // ==========================================================\n  // 11. 计算规则风险等级\n  // ==========================================================\n\n  let highestRiskHit = null;\n\n\n  for (const hit of riskHits) {\n\n    if (\n      highestRiskHit === null ||\n      RISK_SCORE[hit.risk] >\n      RISK_SCORE[highestRiskHit.risk]\n    ) {\n      highestRiskHit = hit;\n    }\n  }\n\n\n  let ruleRiskLevel =\n    highestRiskHit?.risk ?? null;\n\n\n  let ruleCategory =\n    highestRiskHit?.category ?? null;\n\n\n  let hardRiskHit =\n    highestRiskHit\n      ? riskHits.some(\n          hit =>\n            hit.risk === highestRiskHit.risk &&\n            hit.hardRisk === true\n        )\n      : false;\n\n\n  // ==========================================================\n  // 12. Rating/Text Conflict\n  //     （评分与文本冲突）\n  //\n  // 只检查 INITIAL_REVIEW。\n  //\n  // 追评沿用了首评评分，\n  // 因此不能把追评和原始五星直接当成矛盾。\n  // ==========================================================\n\n  const productRating =\n    numberOrNull(row.product_rating);\n\n\n  const aliasCanonicals =\n    getAliasCanonicals(row);\n\n\n  const aliasSuggestsRisk =\n    aliasCanonicals.some(\n      value =>\n        [\n          '恶心',\n          '头晕',\n          '过敏',\n          '假货',\n          '密封',\n        ].includes(value)\n    );\n\n\n  // 即使 Alias 没有被 Regex 识别，\n  // 仍保留一个轻量 fallback。\n  const hasAliasLiteral =\n    /exin|tou\\s*yun|guomin|seal/.test(text);\n\n\n  const unresolvedNegativeExpression =\n    /反胃得厉害|大家自己注意|感觉不对劲/.test(text);\n\n\n  const conflictSignal =\n    ['P0', 'P1', 'P2'].includes(\n      ruleRiskLevel\n    ) ||\n    weakAuthenticityDoubt ||\n    aliasSuggestsRisk ||\n    hasAliasLiteral ||\n    unresolvedNegativeExpression;\n\n\n  if (\n    row.content_type === 'INITIAL_REVIEW' &&\n    productRating !== null &&\n    productRating >= 4 &&\n    conflictSignal\n  ) {\n\n    pushUnique(\n      metaTags,\n      'RATING_TEXT_CONFLICT'\n    );\n\n    pushUnique(\n      matchedRuleIds,\n      'R_META_RATING_TEXT_CONFLICT'\n    );\n\n    needAi = true;\n  }\n\n\n  // ==========================================================\n  // 13. need_ai 决策\n  // ==========================================================\n\n\n  // 强/弱真伪质疑都需要 AI 补充语义判断\n  if (\n    strongAuthenticityDoubt ||\n    weakAuthenticityDoubt\n  ) {\n    needAi = true;\n  }\n\n\n  // 拼音 / 英文混杂：\n  // 代码发现了，但不完全信任\n  if (\n    aliasCanonicals.length > 0 ||\n    hasAliasLiteral\n  ) {\n    needAi = true;\n  }\n\n\n  // 明确的归因不确定\n  if (\n    /(?:不确定|不知道)是不是这个原因/.test(text)\n  ) {\n    needAi = true;\n  }\n\n\n  // P0 同时存在多个业务问题时，\n  // 交 AI 补充摘要与语义\n  if (\n    ruleRiskLevel === 'P0' &&\n    metaTags.includes('MULTI_ISSUE')\n  ) {\n    needAi = true;\n  }\n\n\n  // ==========================================================\n  // 14. Clear Positive / Closure\n  //     （明确正面 / 明确闭环）\n  //\n  // 只有出现足够明确的正面信号，\n  // 才允许规则直接给 NONE。\n  //\n  // 没匹配 ≠ NONE\n  // ==========================================================\n\n  const clearPositiveOrClosure =\n    /回购/.test(text) ||\n    /满意/.test(text) ||\n    /不错/.test(text) ||\n    /挺好/.test(text) ||\n    /好喝/.test(text) ||\n    /日期很新/.test(text) ||\n    /第二次购买/.test(text) ||\n    /第二次买/.test(text) ||\n    /老客户/.test(text) ||\n    /好吞咽/.test(text) ||\n    /会一直喝/.test(text) ||\n    /家里人一直在吃/.test(text) ||\n    /舒服多了/.test(text) ||\n    /放心了/.test(text) ||\n    /会继续吃/.test(text) ||\n    /密封膜是完整的/.test(text) ||\n    /物流超快/.test(text) ||\n    /包装严实/.test(text) ||\n    /挺贴心/.test(text) ||\n    /处理还算及时/.test(text) ||\n    /已经寄回/.test(text) ||\n    /补发.*日期新的/.test(text) ||\n    /就当没事了/.test(text) ||\n    /态度还行/.test(text) ||\n    /没有出现漏液/.test(text) ||\n    /没有出现恶心/.test(text) ||\n    /没有不舒服/.test(text);\n\n\n  // ==========================================================\n  // 15. NONE / UNKNOWN 决策\n  // ==========================================================\n\n  let ruleDecision;\n\n\n  if (ruleRiskLevel !== null) {\n\n    ruleDecision = ruleRiskLevel;\n\n  } else {\n\n    const unresolvedSignal =\n      weakAuthenticityDoubt ||\n      aliasSuggestsRisk ||\n      hasAliasLiteral ||\n      unresolvedNegativeExpression;\n\n\n    if (unresolvedSignal) {\n\n      // UNKNOWN 不写进飞书 risk_level，\n      // 只作为 n8n 临时决策。\n      ruleDecision = 'UNKNOWN';\n      ruleRiskLevel = null;\n      needAi = true;\n\n    } else if (\n      hasNegationContext ||\n      clearPositiveOrClosure\n    ) {\n\n      ruleDecision = 'NONE';\n      ruleRiskLevel = 'NONE';\n      needAi = false;\n\n      pushUnique(\n        matchedRuleIds,\n        hasNegationContext\n          ? 'R_NONE_NEGATION_CONTEXT'\n          : 'R_NONE_CLEAR_POSITIVE'\n      );\n\n    } else {\n\n      // 非空文本，但规则无法理解。\n      //\n      // 核心原则：\n      // 没匹配 ≠ 没风险。\n      ruleDecision = 'UNKNOWN';\n      ruleRiskLevel = null;\n      needAi = true;\n\n      pushUnique(\n        matchedRuleIds,\n        'R_UNKNOWN_NO_DETERMINISTIC_MATCH'\n      );\n    }\n  }\n\n\n  // ==========================================================\n  // 16. 组合 Rule Tags\n  //\n  // 顺序：\n  // 业务标签\n  // → 元信息标签\n  // → 数据质量标签\n  // ==========================================================\n\n  const finalTags = [\n    ...businessTags,\n    ...metaTags,\n    ...dataQualityTags,\n  ];\n\n\n  const ruleHit =\n    matchedRuleIds.length > 0 ||\n    finalTags.length > 0 ||\n    ruleDecision === 'NONE';\n\n\n  // ==========================================================\n  // 17. 输出\n  // ==========================================================\n\n  let ruleReason;\n\n  if (ruleDecision === 'UNKNOWN') {\n\n    ruleReason =\n      '确定性规则无法稳定完成风险定级，进入 AI 语义分析。';\n\n  } else if (ruleDecision === 'NONE') {\n\n    ruleReason =\n      hasNegationContext\n        ? '检测到明确否定语境，未发现有效风险。'\n        : '检测到明确正面或已闭环表达，规则判断为无风险。';\n\n  } else {\n\n    ruleReason =\n      `命中确定性规则，当前规则风险等级为 ${ruleDecision}。`;\n  }\n\n\n  return {\n    analysis_scope: 'IN_SCOPE',\n    skip_reason: null,\n\n    rules_version: RULES_VERSION,\n\n    rule_hit: ruleHit,\n    rule_tags: finalTags,\n\n    rule_risk_level: ruleRiskLevel,\n\n    // n8n 内部使用\n    rule_decision: ruleDecision,\n\n    need_ai: needAi,\n\n    // n8n 内部辅助字段\n    rule_category: ruleCategory,\n    matched_rule_ids: matchedRuleIds,\n    hard_risk_hit: hardRiskHit,\n\n    rule_reason: ruleReason,\n\n    _rule_internal: {\n      risk_hits: riskHits,\n      data_quality_tags: dataQualityTags,\n    },\n  };\n}\n\n\n// ============================================================\n// 18. First Pass（第一遍）\n//     每条事件独立判断\n// ============================================================\n\nconst evaluated = items.map(item => {\n\n  const result =\n    evaluateItem(item.json);\n\n  return {\n    json: {\n      ...item.json,\n      ...result,\n    }\n  };\n});\n\n\n// ============================================================\n// 19. 建立首评索引\n//\n// content_id\n// → INITIAL_REVIEW 分析结果\n//\n// 用于少量 Thread Context（线程上下文）。\n// ============================================================\n\nconst initialByContentId = new Map();\n\n\nfor (const item of evaluated) {\n\n  const row = item.json;\n\n  if (\n    row.content_type === 'INITIAL_REVIEW'\n  ) {\n\n    initialByContentId.set(\n      row.content_id,\n      row\n    );\n  }\n}\n\n\n// ============================================================\n// 20. Second Pass（第二遍）\n//     处理“确认上一条风险”的追评\n//\n// 示例：\n// 首评：吃完恶心\n// 追评：停了三天好多了，基本确定是这个的问题\n//\n// 追评虽然没有再次写“恶心”，\n// 但在同一线程中属于风险确认。\n// ============================================================\n\nfor (const item of evaluated) {\n\n  const row = item.json;\n\n  if (\n    row.content_type !== 'FOLLOWUP_REVIEW'\n  ) {\n    continue;\n  }\n\n\n  if (\n    row.rule_decision !== 'UNKNOWN'\n  ) {\n    continue;\n  }\n\n\n  const text = textOf(row);\n\n\n  const confirmsPreviousIssue =\n    /基本确定是这个的问题/.test(text) ||\n    /停了[^。！？，,]*(?:好多了|好了)/.test(text) ||\n    /以后不敢吃/.test(text);\n\n\n  if (!confirmsPreviousIssue) {\n    continue;\n  }\n\n\n  const root =\n    initialByContentId.get(\n      row.root_review_id\n    );\n\n\n  if (!root) {\n    continue;\n  }\n\n\n  if (\n    !['P0', 'P1'].includes(\n      root.rule_risk_level\n    )\n  ) {\n    continue;\n  }\n\n\n  const rootRiskHits =\n    root._rule_internal?.risk_hits ?? [];\n\n\n  const inheritedRiskTags =\n    rootRiskHits\n      .filter(\n        hit =>\n          hit.risk ===\n          root.rule_risk_level\n      )\n      .map(hit => hit.tag);\n\n\n  const dataQualityTags =\n    row._rule_internal\n      ?.data_quality_tags ?? [];\n\n\n  row.rule_tags = [\n    ...new Set([\n      ...inheritedRiskTags,\n      ...dataQualityTags,\n    ])\n  ];\n\n\n  row.rule_risk_level =\n    root.rule_risk_level;\n\n\n  row.rule_decision =\n    root.rule_risk_level;\n\n\n  row.rule_category =\n    root.rule_category;\n\n\n  row.hard_risk_hit =\n    root.hard_risk_hit;\n\n\n  row.rule_hit = true;\n\n\n  // 追评已经进一步确认此前问题，\n  // 当前测试设计中不必再次调用 AI。\n  row.need_ai = false;\n\n\n  row.matched_rule_ids = [\n    ...new Set([\n      ...(row.matched_rule_ids ?? []),\n      'R_THREAD_CONFIRMATION_INHERIT',\n    ])\n  ];\n\n\n  row.rule_reason =\n    '追评明确确认或延续首评中的高风险问题，继承同一评价线程的风险判断。';\n}\n\n\n// ============================================================\n// 21. 删除内部临时计算对象\n//\n// _rule_internal 只是节点内部使用，\n// 不继续往后传。\n// ============================================================\n\nreturn evaluated.map(item => {\n\n  const {\n    _rule_internal,\n    ...cleanJson\n  } = item.json;\n\n  return {\n    json: cleanJson\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -608,
+        224
+      ],
+      "id": "e26d7822-cf6b-4233-ae8b-c8425ef8e2dc",
+      "name": "Rule Engine v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "output": "={{\n  $json.analysis_scope === 'OUT_OF_SCOPE'\n    ? 0\n    : (\n        $json.analysis_scope === 'IN_SCOPE' &&\n        String($json.need_ai).toLowerCase() === 'true'\n      )\n      ? 1\n      : (\n          $json.analysis_scope === 'IN_SCOPE' &&\n          String($json.need_ai).toLowerCase() === 'false'\n        )\n        ? 2\n        : 3\n}}",
+        "looseTypeValidation": true
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        160
+      ],
+      "id": "02e343b1-7fae-4a81-8f4e-efd57aeb2a90",
+      "name": "Route Analysis Path v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Prepare Dify Payload v1.0\n//\n// 职责：\n// 1. 只接收 AI_REQUIRED 分支的数据\n// 2. 保留 PostgreSQL / n8n 后续需要的追踪字段\n// 3. 把 Dify 需要的 9 个业务变量整理好\n// 4. 将 rule_tags 数组序列化为 JSON 字符串\n//\n// 不负责：\n// - 调用 Dify\n// - AI 判断\n// - Final Decision\n// ============================================================\n\nconst items = $input.all();\n\nconst output = [];\n\n\n// ============================================================\n// 工具函数\n// ============================================================\n\nfunction safeString(value) {\n  if (value === undefined || value === null) {\n    return '';\n  }\n\n  return String(value);\n}\n\n\n// ------------------------------------------------------------\n// AI 调用追踪 ID\n//\n// 旧版本：\n// source_row_no__INITIAL\n//\n// 新 PostgreSQL Canonical 架构：\n// RAW_<raw_id>_<事件类型>\n//\n// 示例：\n// RAW_2_INITIAL\n// RAW_3_FOLLOWUP\n//\n// 注意：\n// ai_case_id 只是 n8n / Dify 调用链追踪 ID。\n// 真正的业务唯一键仍然是 content_key。\n// ------------------------------------------------------------\n\nfunction buildCaseId(row) {\n\n  let slot = row.content_type;\n\n  if (row.content_type === 'INITIAL_REVIEW') {\n    slot = 'INITIAL';\n  }\n\n  if (row.content_type === 'FOLLOWUP_REVIEW') {\n    slot = 'FOLLOWUP';\n  }\n\n  if (row.content_type === 'BUYER_REPLY') {\n    slot = 'BUYER_REPLY';\n  }\n\n  if (row.content_type === 'SELLER_REPLY') {\n    slot = 'SELLER_REPLY';\n  }\n\n  if (row.content_type === 'PUBLIC_COMMENT') {\n    slot = 'PUBLIC_COMMENT';\n  }\n\n  // raw_id 在当前 PostgreSQL Canonical 架构中必须存在。\n  // 不允许继续生成 undefined__INITIAL 这类追踪 ID。\n  if (\n    row.raw_id === undefined ||\n    row.raw_id === null ||\n    row.raw_id === ''\n  ) {\n    throw new Error(\n      `Prepare Dify Payload v1.0: 缺少 raw_id，无法生成 ai_case_id，content_key=${row.content_key}`\n    );\n  }\n\n  return `RAW_${row.raw_id}_${slot}`;\n}\n\n\n// ============================================================\n// 主处理\n// ============================================================\n\nfor (const item of items) {\n\n  const row = item.json;\n\n\n  // ----------------------------------------------------------\n  // 1. 防御性检查\n  //\n  // 这个节点理论上只应该接 AI_REQUIRED。\n  // ----------------------------------------------------------\n\n  if (row.analysis_scope !== 'IN_SCOPE') {\n    throw new Error(\n      `Prepare Dify Payload v1.0: 收到非 IN_SCOPE 数据，content_key=${row.content_key}`\n    );\n  }\n\n\n  if (row.need_ai !== true) {\n    throw new Error(\n      `Prepare Dify Payload v1.0: 收到 need_ai != true 的数据，content_key=${row.content_key}`\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // 2. rule_tags 序列化\n  //\n  // Serialization（序列化）：\n  // 把数组转换成 JSON 字符串，方便跨系统传输。\n  // ----------------------------------------------------------\n\n  const ruleTagsJson =\n    JSON.stringify(\n      Array.isArray(row.rule_tags)\n        ? row.rule_tags\n        : []\n    );\n\n\n  // ----------------------------------------------------------\n  // 3. 生成 AI 调用追踪 ID\n  //\n  // 示例：\n  // RAW_2_INITIAL\n  // RAW_3_FOLLOWUP\n  //\n  // 不传给模型，只用于 n8n 后续追踪和请求/响应对账。\n  // ----------------------------------------------------------\n\n  const aiCaseId =\n    buildCaseId(row);\n\n\n  // ----------------------------------------------------------\n  // 4. 输出\n  // ----------------------------------------------------------\n\n  output.push({\n    json: {\n\n      // ======================================================\n      // A. n8n / PostgreSQL Tracking Metadata（追踪元数据）\n      // ======================================================\n\n      raw_id:\n        row.raw_id,\n\n      source_staging_id:\n        row.source_staging_id ?? null,\n\n      ai_case_id:\n        aiCaseId,\n\n      // 暂时保留，兼容旧测试/排查。\n      // 新架构不再依赖它生成 ai_case_id。\n      source_row_no:\n        row.source_row_no ?? null,\n\n      content_key:\n        row.content_key,\n\n      content_id:\n        row.content_id,\n\n      root_review_id:\n        row.root_review_id,\n\n      parent_content_id:\n        row.parent_content_id ?? null,\n\n      content_type:\n        row.content_type,\n\n      platform:\n        row.platform,\n\n      shop_id:\n        row.shop_id ?? null,\n\n      shop_name:\n        row.shop_name,\n\n      product_id:\n        row.product_id,\n\n      product_name:\n        row.product_name,\n\n      sku_id:\n        row.sku_id ?? null,\n\n      sku_name:\n        row.sku_name ?? null,\n\n      source_review_id:\n        row.source_review_id ?? null,\n\n      rule_risk_level_original:\n        row.rule_risk_level,\n\n      rule_decision_original:\n        row.rule_decision,\n\n      hard_risk_hit_original:\n        row.hard_risk_hit,\n\n\n      // ======================================================\n      // B. Dify Inputs\n      //\n      // 这 9 个字段与 Dify Start 节点完全对应。\n      // 不要随意改字段名。\n      // ======================================================\n\n      dify_inputs: {\n\n        content_text:\n          safeString(row.content_text),\n\n        content_type:\n          safeString(row.content_type),\n\n        product_name:\n          safeString(row.product_name),\n\n        product_rating:\n          row.product_rating ?? null,\n\n        rating_label:\n          safeString(row.rating_label),\n\n        rule_tags_json:\n          ruleTagsJson,\n\n        rule_risk_level:\n          safeString(row.rule_risk_level),\n\n        rule_decision:\n          safeString(row.rule_decision),\n\n        hard_risk_hit:\n          String(row.hard_risk_hit),\n      }\n    }\n  });\n}\n\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        176
+      ],
+      "id": "312c64b1-2ae2-417d-ab77-32a6369dd21c",
+      "name": "Prepare Dify Payload v1.0"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8081/v1/workflows/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  {\n    inputs: $json.dify_inputs,\n    response_mode: \"blocking\",\n    user: \"n8n-voc-system\"\n  }\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1168,
+        176
+      ],
+      "id": "f30a56d4-9194-4742-89b9-d061a70cc973",
+      "name": "Call Dify Workflow v1.0",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "w5VIjLSLCzynFxKJ",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Normalize Dify Response v1.0\n//\n// 职责：\n// 1. 解析 Dify Workflow API 返回结果\n// 2. 恢复 PostgreSQL / n8n Tracking Metadata（追踪信息）\n// 3. 提取 AI 分析结果\n// 4. 提取 workflow_run_id / elapsed_time / token usage（如有）\n// 5. 为后续 Final Decision 提供统一结构\n// ============================================================\n\n\n// 当前 HTTP Request 返回的数据\nconst response = $json;\n\n\n// ============================================================\n// 1. 找回对应的原始请求数据\n//\n// n8n Item Linking（数据项关联）允许下游节点\n// 找到这一条 Dify Response 对应的\n// Prepare Dify Payload item。\n// ============================================================\n\nconst source =\n  $('Prepare Dify Payload v1.0').item.json;\n\n\n// ============================================================\n// 2. 基础结构提取\n// ============================================================\n\nconst data =\n  response.data ?? {};\n\nconst outputs =\n  data.outputs ?? {};\n\n\n// ============================================================\n// 3. Workflow 调用是否成功\n// ============================================================\n\nconst workflowSucceeded =\n  data.status === 'succeeded';\n\nconst validationSucceeded =\n  outputs.validation_status === 'SUCCESS';\n\n\n// ============================================================\n// 4. 统一状态\n// ============================================================\n\nlet aiCallStatus;\n\nif (!workflowSucceeded) {\n\n  aiCallStatus =\n    'WORKFLOW_ERROR';\n\n} else if (!validationSucceeded) {\n\n  aiCallStatus =\n    'VALIDATION_ERROR';\n\n} else {\n\n  aiCallStatus =\n    'SUCCESS';\n}\n\n\n// ============================================================\n// 5. Performance（性能）\n// ============================================================\n\nconst elapsedTime =\n  data.elapsed_time ?? null;\n\nconst latencyMs =\n  typeof elapsedTime === 'number'\n    ? Math.round(elapsedTime * 1000)\n    : null;\n\n\n// ============================================================\n// 6. rule_tags 恢复\n//\n// Prepare Dify Payload 中为了传输给 Dify，\n// rule_tags 已被序列化成 JSON 字符串。\n// 这里重新恢复成数组，供 Final Decision / Analysis Record 使用。\n// ============================================================\n\nlet ruleTags = [];\n\ntry {\n\n  const rawRuleTags =\n    source?.dify_inputs?.rule_tags_json;\n\n  if (rawRuleTags) {\n    const parsed =\n      JSON.parse(rawRuleTags);\n\n    if (Array.isArray(parsed)) {\n      ruleTags = parsed;\n    }\n  }\n\n} catch (error) {\n\n  ruleTags = [];\n}\n\n\n// ============================================================\n// 7. 输出统一结构\n// ============================================================\n\nreturn {\n  json: {\n\n    // ========================================================\n    // A. PostgreSQL / n8n Correlation Metadata\n    // ========================================================\n\n    raw_id:\n      source.raw_id ?? null,\n\n    source_staging_id:\n      source.source_staging_id ?? null,\n\n    ai_case_id:\n      source.ai_case_id ?? null,\n\n    source_row_no:\n      source.source_row_no ?? null,\n\n    content_key:\n      source.content_key,\n\n    content_id:\n      source.content_id,\n\n    root_review_id:\n      source.root_review_id,\n\n    parent_content_id:\n      source.parent_content_id ?? null,\n\n    content_type:\n      source.content_type,\n\n    source_review_id:\n      source.source_review_id ?? null,\n\n\n    // ========================================================\n    // B. Business Metadata\n    // ========================================================\n\n    platform:\n      source.platform ?? null,\n\n    shop_id:\n      source.shop_id ?? null,\n\n    shop_name:\n      source.shop_name ?? null,\n\n    product_id:\n      source.product_id ?? null,\n\n    product_name:\n      source.product_name ?? null,\n\n    sku_id:\n      source.sku_id ?? null,\n\n    sku_name:\n      source.sku_name ?? null,\n\n\n    // ========================================================\n    // C. 原 Rule Engine 结果\n    // ========================================================\n\n    rule_hit:\n      true,\n\n    rule_tags:\n      ruleTags,\n\n    rule_risk_level:\n      source.rule_risk_level_original ?? null,\n\n    rule_decision:\n      source.rule_decision_original ?? null,\n\n    hard_risk_hit:\n      source.hard_risk_hit_original ?? false,\n\n\n    // ========================================================\n    // D. AI 调用状态\n    // ========================================================\n\n    ai_called:\n      true,\n\n    ai_call_status:\n      aiCallStatus,\n\n    ai_validation_status:\n      outputs.validation_status ?? null,\n\n    dify_task_id:\n      response.task_id ?? null,\n\n    dify_workflow_run_id:\n      response.workflow_run_id\n      ?? data.id\n      ?? null,\n\n    dify_status:\n      data.status ?? null,\n\n\n    // ========================================================\n    // E. AI 分析结果\n    // ========================================================\n\n    ai_category:\n      outputs.category ?? null,\n\n    ai_subcategory:\n      outputs.subcategory ?? null,\n\n    ai_sentiment:\n      outputs.sentiment ?? null,\n\n    ai_risk_level:\n      outputs.risk_level ?? null,\n\n    ai_summary:\n      outputs.summary ?? null,\n\n    confidence:\n      outputs.confidence ?? null,\n\n    ai_error_message:\n      outputs.error_message ?? null,\n\n    ai_raw_output:\n      outputs.raw_output ?? null,\n\n\n    // ========================================================\n    // F. Model / Version\n    // ========================================================\n\n    model_name:\n      'DeepSeek V4.1 Flash',\n\n    prompt_version:\n      'review-v1.0',\n\n\n    // ========================================================\n    // G. Performance\n    //\n    // 当前 Dify API 能提供 total_tokens，\n    // 但没有稳定返回 input/output 拆分。\n    // 所以：\n    // - total_tokens：真实值\n    // - input_tokens / output_tokens：NULL\n    // ========================================================\n\n    input_tokens:\n      null,\n\n    output_tokens:\n      null,\n\n    total_tokens:\n      data.total_tokens ?? null,\n\n    elapsed_time:\n      elapsedTime,\n\n    latency_ms:\n      latencyMs,\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        176
+      ],
+      "id": "6c78bd22-3bd1-47b5-8e43-629baa2183ca",
+      "name": "Normalize Dify Response v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Final Decision Engine v1.0\n//\n// 职责：\n// 1. 合并 Rule Engine 与 AI 的风险判断\n// 2. 确定 final_* 业务结果\n// 3. 防止 AI 降级明确的规则风险\n// 4. AI 失败时允许确定性规则兜底\n// 5. 标记规则 / AI 冲突是否需要人工复核\n//\n// 当前节点仅处理 AI_REQUIRED 分支。\n// RULE_ONLY / OUT_OF_SCOPE 后面分别处理。\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. Risk Vocabulary（风险等级定义）\n// ============================================================\n\nconst RISK_SCORE = {\n  NONE: 0,\n  P3: 1,\n  P2: 2,\n  P1: 3,\n  P0: 4,\n};\n\nconst VALID_RISKS = new Set([\n  'NONE',\n  'P3',\n  'P2',\n  'P1',\n  'P0',\n]);\n\n\nfunction normalizeRisk(value) {\n\n  if (\n    value === undefined ||\n    value === null ||\n    value === ''\n  ) {\n    return null;\n  }\n\n  const risk =\n    String(value).trim().toUpperCase();\n\n  return VALID_RISKS.has(risk)\n    ? risk\n    : null;\n}\n\n\nfunction higherRisk(a, b) {\n\n  const riskA = normalizeRisk(a);\n  const riskB = normalizeRisk(b);\n\n  if (riskA === null) {\n    return riskB;\n  }\n\n  if (riskB === null) {\n    return riskA;\n  }\n\n  return RISK_SCORE[riskA] >= RISK_SCORE[riskB]\n    ? riskA\n    : riskB;\n}\n\n\n// ============================================================\n// 2. 输入标准化\n// ============================================================\n\nconst ruleRisk =\n  normalizeRisk(row.rule_risk_level);\n\nconst aiRisk =\n  normalizeRisk(row.ai_risk_level);\n\nconst ruleDecision =\n  row.rule_decision\n    ? String(row.rule_decision).toUpperCase()\n    : null;\n\nconst aiSucceeded =\n  row.ai_call_status === 'SUCCESS' &&\n  row.ai_validation_status === 'SUCCESS';\n\n\n// 规则是否真正提供了风险判断\n//\n// P0~P3 = 有风险结论\n// NONE  = 明确无风险\n// UNKNOWN / null = 规则无法判断\nconst ruleHasDecision =\n  ruleRisk !== null;\n\n\n// 规则是否提供了“风险下限”\n//\n// NONE 不属于风险下限。\n// P0~P3 才属于。\nconst ruleHasRiskFloor =\n  ruleRisk !== null &&\n  ruleRisk !== 'NONE';\n\n\n// ============================================================\n// 3. Final Risk Level（最终风险等级）\n// ============================================================\n\nlet finalRiskLevel = null;\nlet decisionSource = null;\nlet manualReviewRequired = false;\n\nlet decisionReason = '';\n\n\n// ------------------------------------------------------------\n// Case A：AI 成功\n// ------------------------------------------------------------\n\nif (aiSucceeded) {\n\n  // 规则已有明确风险 P0~P3：\n  // 最终取 Rule / AI 中更严重者。\n  if (ruleHasRiskFloor) {\n\n    finalRiskLevel =\n      higherRisk(ruleRisk, aiRisk);\n\n    decisionSource =\n      'RULE+AI';\n\n    decisionReason =\n      `规则风险=${ruleRisk}，AI风险=${aiRisk}，最终取更高风险=${finalRiskLevel}`;\n\n\n    // Rule 和 AI 不一致时标记人工复核。\n    if (ruleRisk !== aiRisk) {\n      manualReviewRequired = true;\n    }\n\n  }\n\n  // Rule NONE / UNKNOWN / null：\n  // 风险判断主要交给 AI。\n  else {\n\n    finalRiskLevel =\n      aiRisk;\n\n    decisionSource =\n      'AI';\n\n    decisionReason =\n      `规则未形成风险下限（${ruleDecision ?? ruleRisk ?? 'UNKNOWN'}），采用AI风险=${aiRisk}`;\n  }\n\n}\n\n\n// ------------------------------------------------------------\n// Case B：AI 失败\n// ------------------------------------------------------------\n\nelse {\n\n  manualReviewRequired = true;\n\n\n  // Rule 至少给出了明确结果\n  if (ruleHasDecision) {\n\n    finalRiskLevel =\n      ruleRisk;\n\n    decisionSource =\n      'RULE';\n\n    decisionReason =\n      `AI未成功完成分析，使用规则结果=${ruleRisk}兜底`;\n  }\n\n  // Rule 本身也是 UNKNOWN\n  else {\n\n    finalRiskLevel =\n      null;\n\n    decisionSource =\n      null;\n\n    decisionReason =\n      '规则无法完成判断，AI分析也未成功，无法生成最终风险等级';\n  }\n}\n\n\n// ============================================================\n// 4. Final Semantic Result（最终语义结果）\n//\n// AI 成功时：\n// category / sentiment / summary 使用 AI 结果。\n//\n// AI 失败时：\n// 不编造语义字段，保持 null。\n// ============================================================\n\nconst finalCategory =\n  aiSucceeded\n    ? row.ai_category\n    : null;\n\nconst finalSubcategory =\n  aiSucceeded\n    ? row.ai_subcategory\n    : null;\n\nconst finalSentiment =\n  aiSucceeded\n    ? row.ai_sentiment\n    : null;\n\nconst finalSummary =\n  aiSucceeded\n    ? row.ai_summary\n    : null;\n\n\n// ============================================================\n// 5. Analysis Status（分析状态）\n// ============================================================\n\nlet analysisStatus;\n\nif (aiSucceeded) {\n\n  analysisStatus = 'SUCCESS';\n\n} else {\n\n  analysisStatus = 'ERROR';\n}\n\n\n// ============================================================\n// 6. 输出\n// ============================================================\n\nreturn {\n  json: {\n\n    // 保留前面所有数据\n    ...row,\n\n\n    // --------------------------------------------------------\n    // Final Decision\n    // --------------------------------------------------------\n\n    final_category:\n      finalCategory,\n\n    final_subcategory:\n      finalSubcategory,\n\n    final_sentiment:\n      finalSentiment,\n\n    final_risk_level:\n      finalRiskLevel,\n\n    final_summary:\n      finalSummary,\n\n    decision_source:\n      decisionSource,\n\n\n    // --------------------------------------------------------\n    // Status\n    // --------------------------------------------------------\n\n    analysis_status:\n      analysisStatus,\n\n    manual_review_required:\n      manualReviewRequired,\n\n\n    // --------------------------------------------------------\n    // Internal Debug / Explainability\n    //\n    // 当前只在 n8n 内部使用，\n    // AI_Analysis 表目前没有该字段。\n    // --------------------------------------------------------\n\n    final_decision_reason:\n      decisionReason,\n\n\n    // --------------------------------------------------------\n    // Conflict Indicator\n    // --------------------------------------------------------\n\n    risk_conflict:\n      (\n        aiSucceeded &&\n        ruleHasRiskFloor &&\n        ruleRisk !== aiRisk\n      )\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -32
+      ],
+      "id": "5d331d83-980c-4d3b-8956-987c8e7bb254",
+      "name": "Final Decision Engine v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Build AI Analysis Record - AI Path v1.0\n//\n// 职责：\n// 将 AI_REQUIRED 分支经过 Final Decision 后的结果\n// 映射成 AI_Analysis 表 V1 的正式 34 字段结构。\n//\n// 输入：\n// Final Decision Engine v1.0\n//\n// 输出：\n// 与飞书 AI_Analysis V1 Schema 对齐的 34 个字段\n//\n// 当前仅处理：\n// analysis_scope = IN_SCOPE\n// need_ai = true\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. Rule Tags（规则标签）标准化\n//\n// Final Decision 现在已经保留 rule_tags 数组，\n// 所以不再反向依赖 Prepare Dify Payload。\n// ============================================================\n\nconst ruleTagsArray =\n  Array.isArray(row.rule_tags)\n    ? row.rule_tags\n    : [];\n\nconst ruleTagsJson =\n  JSON.stringify(ruleTagsArray);\n\n\n// ============================================================\n// 2. Rule Hit\n//\n// 优先使用上游真实 rule_hit。\n// 如果上游没有该字段，再根据 rule_tags 做兜底。\n// ============================================================\n\nconst ruleHit =\n  typeof row.rule_hit === 'boolean'\n    ? row.rule_hit\n    : ruleTagsArray.length > 0;\n\n\n// ============================================================\n// 3. Version（版本）\n//\n// rules_version 不再硬编码 rules-v1.0。\n// 当前同一次 execution 中所有 Rule Engine item\n// 使用同一个规则版本，因此读取本次 Rule Engine 的真实版本。\n// ============================================================\n\nconst ruleEngineFirstItem =\n  $('Rule Engine v1.0').first().json;\n\nconst rulesVersion =\n  ruleEngineFirstItem.rules_version ?? null;\n\nif (!rulesVersion) {\n  throw new Error(\n    `Build AI Analysis Record - AI Path v1.0: 无法获取 rules_version，content_key=${row.content_key}`\n  );\n}\n\n\n// prompt / model 优先使用当前实际 AI 调用链传下来的版本。\n\nconst promptVersion =\n  row.prompt_version ?? null;\n\nconst modelName =\n  row.model_name ?? null;\n\nif (!promptVersion) {\n  throw new Error(\n    `Build AI Analysis Record - AI Path v1.0: 缺少 prompt_version，content_key=${row.content_key}`\n  );\n}\n\nif (!modelName) {\n  throw new Error(\n    `Build AI Analysis Record - AI Path v1.0: 缺少 model_name，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 4. Analysis Identity（分析记录身份）\n//\n// analysis_run_id：\n// 同一次 n8n execution 共用，用于批次追踪。\n//\n// analysis_id：\n// 每一条分析记录唯一。\n// ============================================================\n\nconst executionId =\n  String($execution.id);\n\nconst analysisRunId =\n  `N8N_${executionId}`;\n\nconst analysisId =\n  `AN_${executionId}_${row.ai_case_id}`;\n\nconst analyzedAt =\n  new Date().toISOString();\n\n\n// ============================================================\n// 5. Token Usage\n//\n// 当前只能稳定获得 total_tokens。\n// input_tokens / output_tokens 拿不到时必须保持 null，\n// 不能伪造为 0。\n// ============================================================\n\nconst inputTokens =\n  (\n    typeof row.input_tokens === 'number'\n    && Number.isFinite(row.input_tokens)\n  )\n    ? Math.round(row.input_tokens)\n    : null;\n\nconst outputTokens =\n  (\n    typeof row.output_tokens === 'number'\n    && Number.isFinite(row.output_tokens)\n  )\n    ? Math.round(row.output_tokens)\n    : null;\n\nconst totalTokens =\n  (\n    typeof row.total_tokens === 'number'\n    && Number.isFinite(row.total_tokens)\n  )\n    ? Math.round(row.total_tokens)\n    : null;\n\n\n// ============================================================\n// 6. Latency（延迟）\n//\n// 优先使用 Normalize Dify Response 已经计算好的 latency_ms。\n// 若不存在，再用 elapsed_time × 1000 兜底。\n// ============================================================\n\nlet latencyMs = null;\n\nif (\n  typeof row.latency_ms === 'number'\n  && Number.isFinite(row.latency_ms)\n) {\n\n  latencyMs =\n    Math.round(row.latency_ms);\n\n} else if (\n  typeof row.elapsed_time === 'number'\n  && Number.isFinite(row.elapsed_time)\n) {\n\n  latencyMs =\n    Math.round(row.elapsed_time * 1000);\n}\n\n\n// ============================================================\n// 7. AI Called\n//\n// 能进入 AI Path，说明已经实际调用过 Dify。\n// 即使最终 validation ERROR，也仍然是 true。\n// ============================================================\n\nconst aiCalled =\n  true;\n\n\n// ============================================================\n// 8. Error Message\n//\n// SUCCESS → null\n// ERROR → 使用 AI / Workflow 返回的错误信息\n// ============================================================\n\nlet errorMessage =\n  null;\n\nif (row.analysis_status === 'ERROR') {\n\n  errorMessage =\n    row.ai_error_message\n    || (\n      row.dify_status\n        ? `Dify status=${row.dify_status}`\n        : 'AI analysis failed'\n    );\n}\n\n\n// ============================================================\n// 9. 输出 AI_Analysis 正式 34 字段\n//\n// ⚠️ 不额外加入 raw_id / source_staging_id。\n// PostgreSQL 状态回写后续使用 content_key。\n// ============================================================\n\nreturn {\n  json: {\n\n    // --------------------------------------------------------\n    // Group 1\n    // Association / Version\n    // --------------------------------------------------------\n\n    analysis_id:\n      analysisId,\n\n    content_key:\n      row.content_key,\n\n    analysis_run_id:\n      analysisRunId,\n\n    analyzed_at:\n      analyzedAt,\n\n    rules_version:\n      rulesVersion,\n\n    prompt_version:\n      promptVersion,\n\n    is_current:\n      true,\n\n\n    // --------------------------------------------------------\n    // Group 2\n    // Rule Engine\n    // --------------------------------------------------------\n\n    rule_hit:\n      ruleHit,\n\n    rule_tags:\n      ruleTagsJson,\n\n    rule_risk_level:\n      row.rule_risk_level ?? null,\n\n    need_ai:\n      true,\n\n\n    // --------------------------------------------------------\n    // Group 3\n    // AI Result\n    // --------------------------------------------------------\n\n    ai_called:\n      aiCalled,\n\n    model_name:\n      modelName,\n\n    ai_category:\n      row.ai_category ?? null,\n\n    ai_subcategory:\n      row.ai_subcategory ?? null,\n\n    ai_sentiment:\n      row.ai_sentiment ?? null,\n\n    ai_risk_level:\n      row.ai_risk_level ?? null,\n\n    ai_summary:\n      row.ai_summary ?? null,\n\n    confidence:\n      (\n        typeof row.confidence === 'number'\n        && Number.isFinite(row.confidence)\n      )\n        ? row.confidence\n        : null,\n\n\n    // --------------------------------------------------------\n    // Group 4\n    // Final Decision\n    // --------------------------------------------------------\n\n    final_category:\n      row.final_category ?? null,\n\n    final_subcategory:\n      row.final_subcategory ?? null,\n\n    final_sentiment:\n      row.final_sentiment ?? null,\n\n    final_risk_level:\n      row.final_risk_level ?? null,\n\n    final_summary:\n      row.final_summary ?? null,\n\n    decision_source:\n      row.decision_source ?? null,\n\n\n    // --------------------------------------------------------\n    // Group 5\n    // Usage / Performance\n    // --------------------------------------------------------\n\n    input_tokens:\n      inputTokens,\n\n    output_tokens:\n      outputTokens,\n\n    total_tokens:\n      totalTokens,\n\n    latency_ms:\n      latencyMs,\n\n\n    // --------------------------------------------------------\n    // Group 6\n    // Scope / Status / Error\n    // --------------------------------------------------------\n\n    analysis_scope:\n      'IN_SCOPE',\n\n    analysis_status:\n      row.analysis_status,\n\n    skip_reason:\n      null,\n\n    manual_review_required:\n      row.manual_review_required === true,\n\n    error_message:\n      errorMessage\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1744,
+        -32
+      ],
+      "id": "2980fb35-8869-4023-ba9c-5148d9714381",
+      "name": "Build AI Analysis Record - AI Path v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Build AI Analysis Record - Rule Only Path v1.0\n//\n// 职责：\n// 将 RULE_ONLY 分支的数据整理成\n// AI_Analysis V1 正式 34 字段。\n//\n// 特点：\n// - 不调用 AI\n// - Token = 0\n// - Final Risk 直接使用规则结果\n// - decision_source = RULE\n//\n// 注意：\n// 规则没有提供的语义字段绝不编造。\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. 基础校验\n// ============================================================\n\nif (row.analysis_scope !== 'IN_SCOPE') {\n  throw new Error(\n    `Rule Only Builder: 收到非 IN_SCOPE 数据，content_key=${row.content_key}`\n  );\n}\n\nif (row.need_ai !== false) {\n  throw new Error(\n    `Rule Only Builder: 收到 need_ai != false 的数据，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 2. PostgreSQL Canonical Identity\n//\n// 新架构不再依赖 source_row_no。\n// 使用 raw_id + content_type 生成稳定的本次分析记录 ID。\n// ============================================================\n\nif (\n  row.raw_id === undefined ||\n  row.raw_id === null ||\n  row.raw_id === ''\n) {\n  throw new Error(\n    `Rule Only Builder: 缺少 raw_id，无法生成 analysis_id，content_key=${row.content_key}`\n  );\n}\n\nlet slot =\n  row.content_type ?? 'UNKNOWN';\n\nif (row.content_type === 'INITIAL_REVIEW') {\n  slot = 'INITIAL';\n}\n\nif (row.content_type === 'FOLLOWUP_REVIEW') {\n  slot = 'FOLLOWUP';\n}\n\nif (row.content_type === 'BUYER_REPLY') {\n  slot = 'BUYER_REPLY';\n}\n\nif (row.content_type === 'SELLER_REPLY') {\n  slot = 'SELLER_REPLY';\n}\n\nif (row.content_type === 'PUBLIC_COMMENT') {\n  slot = 'PUBLIC_COMMENT';\n}\n\n\n// ============================================================\n// 3. Analysis Identity（分析记录身份）\n// ============================================================\n\nconst executionId =\n  String($execution.id);\n\nconst analysisRunId =\n  `N8N_${executionId}`;\n\nconst analysisId =\n  `AN_${executionId}_RAW_${row.raw_id}_${slot}`;\n\nconst analyzedAt =\n  new Date().toISOString();\n\n\n// ============================================================\n// 4. Rules Version（规则版本）\n//\n// 优先读取当前 item 自己携带的真实版本。\n// 若当前 item 没有，再从本次 Rule Engine execution 获取。\n// 不再硬编码 rules-v1.0。\n// ============================================================\n\nconst ruleEngineFirstItem =\n  $('Rule Engine v1.0').first().json;\n\nconst rulesVersion =\n  row.rules_version\n  ?? ruleEngineFirstItem.rules_version\n  ?? null;\n\nif (!rulesVersion) {\n  throw new Error(\n    `Rule Only Builder: 无法获取 rules_version，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 5. Rule Tags 标准化\n//\n// Rule Engine 可能输出：\n// - rule_tags 数组\n// - JSON 字符串\n//\n// AI_Analysis 表要求保存 JSON 数组字符串。\n// ============================================================\n\nlet ruleTagsArray = [];\n\nif (Array.isArray(row.rule_tags)) {\n\n  ruleTagsArray =\n    row.rule_tags;\n\n} else if (\n  typeof row.rule_tags === 'string'\n  && row.rule_tags.trim() !== ''\n) {\n\n  try {\n\n    const parsed =\n      JSON.parse(row.rule_tags);\n\n    ruleTagsArray =\n      Array.isArray(parsed)\n        ? parsed\n        : [];\n\n  } catch {\n\n    // 如果不是合法 JSON，但确实有文本，\n    // 作为单个 tag 保留。\n    ruleTagsArray = [\n      row.rule_tags\n    ];\n  }\n}\n\nconst ruleTagsJson =\n  JSON.stringify(ruleTagsArray);\n\n\n// ============================================================\n// 6. Rule Hit\n//\n// 优先使用上游明确给出的 rule_hit。\n// 没有时，再使用 matched_rule_ids / rule_tags 兜底。\n// ============================================================\n\nconst ruleHit =\n  typeof row.rule_hit === 'boolean'\n    ? row.rule_hit\n    : (\n        ruleTagsArray.length > 0\n        ||\n        (\n          Array.isArray(row.matched_rule_ids)\n          && row.matched_rule_ids.length > 0\n        )\n      );\n\n\n// ============================================================\n// 7. Final Risk\n//\n// RULE_ONLY 的核心：\n// 不经过 AI，最终风险直接采用规则结果。\n// ============================================================\n\nconst finalRiskLevel =\n  row.rule_risk_level ?? null;\n\n\n// ============================================================\n// 8. Final Semantic Fields\n//\n// 只有 Rule Engine 真正提供了对应字段时才使用。\n// 不能在这里重新做语义推断。\n// ============================================================\n\nconst finalCategory =\n  row.rule_category ?? null;\n\nconst finalSubcategory =\n  row.rule_subcategory ?? null;\n\nconst finalSentiment =\n  row.rule_sentiment ?? null;\n\n\n// Summary 优先使用规则已经生成的 rule_summary。\n// 如果没有，再退回 rule_reason。\n\nconst finalSummary =\n  row.rule_summary\n  ?? row.rule_reason\n  ?? null;\n\n\n// ============================================================\n// 9. Analysis Status\n// ============================================================\n\nconst analysisStatus =\n  finalRiskLevel !== null\n    ? 'SUCCESS'\n    : 'ERROR';\n\nconst manualReviewRequired =\n  analysisStatus === 'ERROR';\n\nlet errorMessage =\n  null;\n\nif (analysisStatus === 'ERROR') {\n  errorMessage =\n    'RULE_ONLY 分支未获得有效 rule_risk_level';\n}\n\n\n// ============================================================\n// 10. 输出 AI_Analysis 正式 34 字段\n//\n// 注意：\n// Rule Only 没有调用 AI，因此：\n// - prompt_version = null\n// - model_name = null\n// - AI semantic fields = null\n// - token = 0\n// - latency_ms = null\n// ============================================================\n\nreturn {\n  json: {\n\n    // --------------------------------------------------------\n    // Group 1\n    // Association / Version\n    // --------------------------------------------------------\n\n    analysis_id:\n      analysisId,\n\n    content_key:\n      row.content_key,\n\n    analysis_run_id:\n      analysisRunId,\n\n    analyzed_at:\n      analyzedAt,\n\n    rules_version:\n      rulesVersion,\n\n    prompt_version:\n      null,\n\n    is_current:\n      true,\n\n\n    // --------------------------------------------------------\n    // Group 2\n    // Rule Engine\n    // --------------------------------------------------------\n\n    rule_hit:\n      ruleHit,\n\n    rule_tags:\n      ruleTagsJson,\n\n    rule_risk_level:\n      row.rule_risk_level ?? null,\n\n    need_ai:\n      false,\n\n\n    // --------------------------------------------------------\n    // Group 3\n    // AI Result\n    // --------------------------------------------------------\n\n    ai_called:\n      false,\n\n    model_name:\n      null,\n\n    ai_category:\n      null,\n\n    ai_subcategory:\n      null,\n\n    ai_sentiment:\n      null,\n\n    ai_risk_level:\n      null,\n\n    ai_summary:\n      null,\n\n    confidence:\n      null,\n\n\n    // --------------------------------------------------------\n    // Group 4\n    // Final Decision\n    // --------------------------------------------------------\n\n    final_category:\n      finalCategory,\n\n    final_subcategory:\n      finalSubcategory,\n\n    final_sentiment:\n      finalSentiment,\n\n    final_risk_level:\n      finalRiskLevel,\n\n    final_summary:\n      finalSummary,\n\n    decision_source:\n      'RULE',\n\n\n    // --------------------------------------------------------\n    // Group 5\n    // Usage / Performance\n    //\n    // 这里的 0 是真实的 0：\n    // AI 根本没有被调用。\n    // --------------------------------------------------------\n\n    input_tokens:\n      0,\n\n    output_tokens:\n      0,\n\n    total_tokens:\n      0,\n\n    // 没有 AI 调用，\n    // 所以不存在 AI latency。\n    latency_ms:\n      null,\n\n\n    // --------------------------------------------------------\n    // Group 6\n    // Scope / Status\n    // --------------------------------------------------------\n\n    analysis_scope:\n      'IN_SCOPE',\n\n    analysis_status:\n      analysisStatus,\n\n    skip_reason:\n      null,\n\n    manual_review_required:\n      manualReviewRequired,\n\n    error_message:\n      errorMessage\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        656
+      ],
+      "id": "3808b64d-5580-464d-b516-eddc25a859fd",
+      "name": "Build AI Analysis Record - Rule Only Path v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Build AI Analysis Record - Out Of Scope Path v1.0\n//\n// 职责：\n// 将 OUT_OF_SCOPE 分支的数据整理成\n// AI_Analysis V1 正式 34 字段。\n//\n// 核心语义：\n// - 不属于本次分析范围\n// - 不调用 AI\n// - analysis_status = SKIPPED\n// - 不生成 final 风险结论\n//\n// 注意：\n// OUT_OF_SCOPE ≠ NONE\n//\n// NONE:\n// 已完成分析，并明确判断无风险\n//\n// OUT_OF_SCOPE:\n// 根本不进入正式风险分析\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. 基础校验\n// ============================================================\n\nif (row.analysis_scope !== 'OUT_OF_SCOPE') {\n  throw new Error(\n    `Out Of Scope Builder: 收到非 OUT_OF_SCOPE 数据，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 2. PostgreSQL Canonical Identity\n//\n// 新架构不再依赖 source_row_no。\n// 使用 raw_id + content_type 生成本次 analysis_id。\n// ============================================================\n\nif (\n  row.raw_id === undefined ||\n  row.raw_id === null ||\n  row.raw_id === ''\n) {\n  throw new Error(\n    `Out Of Scope Builder: 缺少 raw_id，无法生成 analysis_id，content_key=${row.content_key}`\n  );\n}\n\nlet slot =\n  row.content_type ?? 'UNKNOWN';\n\nif (row.content_type === 'INITIAL_REVIEW') {\n  slot = 'INITIAL';\n}\n\nif (row.content_type === 'FOLLOWUP_REVIEW') {\n  slot = 'FOLLOWUP';\n}\n\nif (row.content_type === 'BUYER_REPLY') {\n  slot = 'BUYER_REPLY';\n}\n\nif (row.content_type === 'SELLER_REPLY') {\n  slot = 'SELLER_REPLY';\n}\n\nif (row.content_type === 'PUBLIC_COMMENT') {\n  slot = 'PUBLIC_COMMENT';\n}\n\n\n// ============================================================\n// 3. Analysis Identity\n// ============================================================\n\nconst executionId =\n  String($execution.id);\n\nconst analysisRunId =\n  `N8N_${executionId}`;\n\nconst analysisId =\n  `AN_${executionId}_RAW_${row.raw_id}_${slot}`;\n\nconst analyzedAt =\n  new Date().toISOString();\n\n\n// ============================================================\n// 4. Rules Version\n//\n// 优先使用当前 item 自己携带的版本。\n// 若没有，再从本次 Rule Engine execution 读取。\n// ============================================================\n\nconst ruleEngineFirstItem =\n  $('Rule Engine v1.0').first().json;\n\nconst rulesVersion =\n  row.rules_version\n  ?? ruleEngineFirstItem.rules_version\n  ?? null;\n\nif (!rulesVersion) {\n  throw new Error(\n    `Out Of Scope Builder: 无法获取 rules_version，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 5. Rule Tags 标准化\n//\n// 如果 Rule Engine 已产生 rule_tags，就忠实保留。\n// 没有则写 []。\n// ============================================================\n\nlet ruleTagsArray = [];\n\nif (Array.isArray(row.rule_tags)) {\n\n  ruleTagsArray =\n    row.rule_tags;\n\n} else if (\n  typeof row.rule_tags === 'string'\n  && row.rule_tags.trim() !== ''\n) {\n\n  try {\n\n    const parsed =\n      JSON.parse(row.rule_tags);\n\n    ruleTagsArray =\n      Array.isArray(parsed)\n        ? parsed\n        : [];\n\n  } catch {\n\n    ruleTagsArray = [\n      row.rule_tags\n    ];\n  }\n}\n\nconst ruleTagsJson =\n  JSON.stringify(ruleTagsArray);\n\n\n// ============================================================\n// 6. Rule Hit\n//\n// 优先使用上游已经明确给出的 rule_hit。\n// 如果没有，再使用 tags / matched_rule_ids 兜底。\n// ============================================================\n\nconst ruleHit =\n  typeof row.rule_hit === 'boolean'\n    ? row.rule_hit\n    : (\n        ruleTagsArray.length > 0\n        ||\n        (\n          Array.isArray(row.matched_rule_ids)\n          && row.matched_rule_ids.length > 0\n        )\n      );\n\n\n// ============================================================\n// 7. Skip Reason\n//\n// 优先保留上游真实原因。\n// ============================================================\n\nconst skipReason =\n  row.skip_reason\n  ?? row.scope_reason\n  ?? row.analysis_scope_reason\n  ?? 'OUT_OF_SCOPE_BY_BUSINESS_RULE';\n\n\n// ============================================================\n// 8. 输出 AI_Analysis 正式 34 字段\n//\n// 不额外增加 raw_id / source_staging_id，\n// 保持 AI_Analysis V1 Schema 不变。\n// ============================================================\n\nreturn {\n  json: {\n\n    // --------------------------------------------------------\n    // Group 1\n    // Association / Version\n    // --------------------------------------------------------\n\n    analysis_id:\n      analysisId,\n\n    content_key:\n      row.content_key,\n\n    analysis_run_id:\n      analysisRunId,\n\n    analyzed_at:\n      analyzedAt,\n\n    rules_version:\n      rulesVersion,\n\n    // 没有调用 AI\n    prompt_version:\n      null,\n\n    is_current:\n      true,\n\n\n    // --------------------------------------------------------\n    // Group 2\n    // Rule Engine\n    // --------------------------------------------------------\n\n    rule_hit:\n      ruleHit,\n\n    rule_tags:\n      ruleTagsJson,\n\n    // OUT_OF_SCOPE 没有进行正式风险分析，\n    // 所以不要写 NONE。\n    rule_risk_level:\n      null,\n\n    need_ai:\n      false,\n\n\n    // --------------------------------------------------------\n    // Group 3\n    // AI Result\n    // --------------------------------------------------------\n\n    ai_called:\n      false,\n\n    model_name:\n      null,\n\n    ai_category:\n      null,\n\n    ai_subcategory:\n      null,\n\n    ai_sentiment:\n      null,\n\n    ai_risk_level:\n      null,\n\n    ai_summary:\n      null,\n\n    confidence:\n      null,\n\n\n    // --------------------------------------------------------\n    // Group 4\n    // Final Decision\n    //\n    // 没进入正式分析，因此不存在 final 风险判断。\n    // --------------------------------------------------------\n\n    final_category:\n      null,\n\n    final_subcategory:\n      null,\n\n    final_sentiment:\n      null,\n\n    final_risk_level:\n      null,\n\n    final_summary:\n      null,\n\n    decision_source:\n      null,\n\n\n    // --------------------------------------------------------\n    // Group 5\n    // Usage / Performance\n    //\n    // AI 完全没调用，因此 Token 是真实的 0。\n    // --------------------------------------------------------\n\n    input_tokens:\n      0,\n\n    output_tokens:\n      0,\n\n    total_tokens:\n      0,\n\n    latency_ms:\n      null,\n\n\n    // --------------------------------------------------------\n    // Group 6\n    // Scope / Status\n    // --------------------------------------------------------\n\n    analysis_scope:\n      'OUT_OF_SCOPE',\n\n    analysis_status:\n      'SKIPPED',\n\n    skip_reason:\n      skipReason,\n\n    manual_review_required:\n      false,\n\n    error_message:\n      null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -256
+      ],
+      "id": "411914ac-7934-4887-9c39-f7ebd1daa75d",
+      "name": "Build AI Analysis Record - Out Of Scope Path v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Analysis Records Validation v1.0\n//\n// 职责：\n// 在 AI_Analysis 写入飞书之前，执行最终数据质量检查。\n//\n// 设计：\n// - PASS：原样返回所有 records\n// - FAIL：直接 throw Error，阻断后续写入\n//\n// 核心检查：\n// 1. RAW/Source Mapper 与 Analysis 数量对账\n// 2. 34 字段 Schema 一致性\n// 3. analysis_id / content_key 唯一性\n// 4. analysis_run_id 批次一致性\n// 5. OUT_OF_SCOPE / RULE_ONLY / AI Path 语义一致性\n// 6. Token / AI调用状态一致性\n// 7. NONE / null / SKIPPED 语义一致性\n// ============================================================\n\n\nconst items = $input.all();\nconst rows = items.map((item, index) => ({\n  index: index + 1,\n  json: item.json,\n}));\n\nconst errors = [];\nconst warnings = [];\n\n\n// ============================================================\n// 1. AI_Analysis V1 正式 34 字段\n// ============================================================\n\nconst EXPECTED_FIELDS = [\n  'analysis_id',\n  'content_key',\n  'analysis_run_id',\n  'analyzed_at',\n  'rules_version',\n  'prompt_version',\n  'is_current',\n\n  'rule_hit',\n  'rule_tags',\n  'rule_risk_level',\n  'need_ai',\n\n  'ai_called',\n  'model_name',\n  'ai_category',\n  'ai_subcategory',\n  'ai_sentiment',\n  'ai_risk_level',\n  'ai_summary',\n  'confidence',\n\n  'final_category',\n  'final_subcategory',\n  'final_sentiment',\n  'final_risk_level',\n  'final_summary',\n  'decision_source',\n\n  'input_tokens',\n  'output_tokens',\n  'total_tokens',\n  'latency_ms',\n\n  'analysis_scope',\n  'analysis_status',\n  'skip_reason',\n  'manual_review_required',\n  'error_message',\n];\n\nconst EXPECTED_FIELD_SET =\n  new Set(EXPECTED_FIELDS);\n\n\n// ============================================================\n// 2. 合法枚举\n// ============================================================\n\nconst VALID_SCOPE =\n  new Set([\n    'IN_SCOPE',\n    'OUT_OF_SCOPE',\n  ]);\n\nconst VALID_STATUS =\n  new Set([\n    'SUCCESS',\n    'SKIPPED',\n    'ERROR',\n  ]);\n\nconst VALID_RISK =\n  new Set([\n    'P0',\n    'P1',\n    'P2',\n    'P3',\n    'NONE',\n  ]);\n\nconst VALID_SENTIMENT =\n  new Set([\n    'POSITIVE',\n    'NEUTRAL',\n    'NEGATIVE',\n    'MIXED',\n  ]);\n\nconst VALID_DECISION_SOURCE =\n  new Set([\n    'RULE',\n    'AI',\n    'RULE+AI',\n    'MANUAL',\n  ]);\n\n\n// ============================================================\n// 3. 工具函数\n// ============================================================\n\nfunction isNullish(value) {\n  return (\n    value === null ||\n    value === undefined ||\n    value === ''\n  );\n}\n\n\nfunction addError(rowNo, code, message) {\n\n  errors.push(\n    `[Row ${rowNo}] ${code}: ${message}`\n  );\n}\n\n\nfunction checkRisk(rowNo, fieldName, value) {\n\n  if (\n    !isNullish(value) &&\n    !VALID_RISK.has(value)\n  ) {\n\n    addError(\n      rowNo,\n      'INVALID_RISK',\n      `${fieldName}=${value}`\n    );\n  }\n}\n\n\n// ============================================================\n// 4. 总数量 Reconciliation（对账）\n//\n// Source Mapper 是本轮标准化后的 content event 总数。\n// Analysis 最终应该一条不少、一条不多。\n// ============================================================\n\nlet sourceMapperCount = null;\n\ntry {\n\n  sourceMapperCount =\n    $('Source Mapper v1.0').all().length;\n\n} catch (error) {\n\n  warnings.push(\n    `无法读取 Source Mapper v1.0 数量：${error.message}`\n  );\n}\n\n\nif (\n  sourceMapperCount !== null &&\n  items.length !== sourceMapperCount\n) {\n\n  errors.push(\n    `[RECONCILIATION] Source Mapper=${sourceMapperCount}，Analysis Records=${items.length}，数量不一致`\n  );\n}\n\n\n// ============================================================\n// 5. 唯一性容器\n// ============================================================\n\nconst analysisIdMap =\n  new Map();\n\nconst contentKeyMap =\n  new Map();\n\nconst analysisRunIds =\n  new Set();\n\n\n// ============================================================\n// 6. 路径计数\n// ============================================================\n\nlet aiPathCount = 0;\nlet ruleOnlyCount = 0;\nlet outOfScopeCount = 0;\n\nlet successCount = 0;\nlet skippedCount = 0;\nlet errorCount = 0;\n\n\n// ============================================================\n// 7. 逐条校验\n// ============================================================\n\nfor (const { index, json: row } of rows) {\n\n\n  // ----------------------------------------------------------\n  // A. Schema（字段结构）检查\n  // ----------------------------------------------------------\n\n  const actualFields =\n    Object.keys(row);\n\n  const actualFieldSet =\n    new Set(actualFields);\n\n\n  // 缺字段\n  const missingFields =\n    EXPECTED_FIELDS.filter(\n      field => !actualFieldSet.has(field)\n    );\n\n  if (missingFields.length > 0) {\n\n    addError(\n      index,\n      'MISSING_FIELDS',\n      missingFields.join(', ')\n    );\n  }\n\n\n  // 多字段\n  const extraFields =\n    actualFields.filter(\n      field => !EXPECTED_FIELD_SET.has(field)\n    );\n\n  if (extraFields.length > 0) {\n\n    addError(\n      index,\n      'EXTRA_FIELDS',\n      extraFields.join(', ')\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // B. 基础必填追踪字段\n  // ----------------------------------------------------------\n\n  if (isNullish(row.analysis_id)) {\n\n    addError(\n      index,\n      'ANALYSIS_ID_EMPTY',\n      'analysis_id 不能为空'\n    );\n\n  } else {\n\n    if (analysisIdMap.has(row.analysis_id)) {\n\n      addError(\n        index,\n        'DUPLICATE_ANALYSIS_ID',\n        `与 Row ${analysisIdMap.get(row.analysis_id)} 重复：${row.analysis_id}`\n      );\n\n    } else {\n\n      analysisIdMap.set(\n        row.analysis_id,\n        index\n      );\n    }\n  }\n\n\n  if (isNullish(row.content_key)) {\n\n    addError(\n      index,\n      'CONTENT_KEY_EMPTY',\n      'content_key 不能为空'\n    );\n\n  } else {\n\n    if (contentKeyMap.has(row.content_key)) {\n\n      addError(\n        index,\n        'DUPLICATE_CONTENT_KEY',\n        `本次分析批次中与 Row ${contentKeyMap.get(row.content_key)} 重复`\n      );\n\n    } else {\n\n      contentKeyMap.set(\n        row.content_key,\n        index\n      );\n    }\n  }\n\n\n  if (isNullish(row.analysis_run_id)) {\n\n    addError(\n      index,\n      'RUN_ID_EMPTY',\n      'analysis_run_id 不能为空'\n    );\n\n  } else {\n\n    analysisRunIds.add(\n      row.analysis_run_id\n    );\n  }\n\n\n  if (isNullish(row.analyzed_at)) {\n\n    addError(\n      index,\n      'ANALYZED_AT_EMPTY',\n      'analyzed_at 不能为空'\n    );\n  }\n\n\n  if (row.is_current !== true) {\n\n    addError(\n      index,\n      'IS_CURRENT_INVALID',\n      '新生成的分析记录 is_current 应为 true'\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // C. Enum（枚举）检查\n  // ----------------------------------------------------------\n\n  if (!VALID_SCOPE.has(row.analysis_scope)) {\n\n    addError(\n      index,\n      'INVALID_SCOPE',\n      `analysis_scope=${row.analysis_scope}`\n    );\n  }\n\n\n  if (!VALID_STATUS.has(row.analysis_status)) {\n\n    addError(\n      index,\n      'INVALID_STATUS',\n      `analysis_status=${row.analysis_status}`\n    );\n  }\n\n\n  checkRisk(\n    index,\n    'rule_risk_level',\n    row.rule_risk_level\n  );\n\n  checkRisk(\n    index,\n    'ai_risk_level',\n    row.ai_risk_level\n  );\n\n  checkRisk(\n    index,\n    'final_risk_level',\n    row.final_risk_level\n  );\n\n\n  if (\n    !isNullish(row.ai_sentiment) &&\n    !VALID_SENTIMENT.has(row.ai_sentiment)\n  ) {\n\n    addError(\n      index,\n      'INVALID_AI_SENTIMENT',\n      `ai_sentiment=${row.ai_sentiment}`\n    );\n  }\n\n\n  if (\n    !isNullish(row.final_sentiment) &&\n    !VALID_SENTIMENT.has(row.final_sentiment)\n  ) {\n\n    addError(\n      index,\n      'INVALID_FINAL_SENTIMENT',\n      `final_sentiment=${row.final_sentiment}`\n    );\n  }\n\n\n  if (\n    !isNullish(row.decision_source) &&\n    !VALID_DECISION_SOURCE.has(row.decision_source)\n  ) {\n\n    addError(\n      index,\n      'INVALID_DECISION_SOURCE',\n      `decision_source=${row.decision_source}`\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // D. rule_tags 必须是 JSON Array String\n  // ----------------------------------------------------------\n\n  try {\n\n    const parsedTags =\n      JSON.parse(row.rule_tags);\n\n    if (!Array.isArray(parsedTags)) {\n\n      addError(\n        index,\n        'RULE_TAGS_NOT_ARRAY',\n        'rule_tags 解析后不是数组'\n      );\n    }\n\n  } catch {\n\n    addError(\n      index,\n      'RULE_TAGS_INVALID_JSON',\n      `rule_tags=${row.rule_tags}`\n    );\n  }\n\n\n  // ----------------------------------------------------------\n  // E. Status 计数\n  // ----------------------------------------------------------\n\n  if (row.analysis_status === 'SUCCESS') {\n    successCount++;\n  }\n\n  if (row.analysis_status === 'SKIPPED') {\n    skippedCount++;\n  }\n\n  if (row.analysis_status === 'ERROR') {\n    errorCount++;\n  }\n\n\n  // ==========================================================\n  // F. OUT_OF_SCOPE 路径\n  // ==========================================================\n\n  if (row.analysis_scope === 'OUT_OF_SCOPE') {\n\n    outOfScopeCount++;\n\n\n    if (row.analysis_status !== 'SKIPPED') {\n\n      addError(\n        index,\n        'OUT_SCOPE_STATUS',\n        'OUT_OF_SCOPE 必须对应 SKIPPED'\n      );\n    }\n\n\n    if (row.need_ai !== false) {\n\n      addError(\n        index,\n        'OUT_SCOPE_NEED_AI',\n        'OUT_OF_SCOPE 的 need_ai 必须为 false'\n      );\n    }\n\n\n    if (row.ai_called !== false) {\n\n      addError(\n        index,\n        'OUT_SCOPE_AI_CALLED',\n        'OUT_OF_SCOPE 不允许调用 AI'\n      );\n    }\n\n\n    if (!isNullish(row.final_risk_level)) {\n\n      addError(\n        index,\n        'OUT_SCOPE_FINAL_RISK',\n        'OUT_OF_SCOPE 的 final_risk_level 必须为空'\n      );\n    }\n\n\n    if (!isNullish(row.decision_source)) {\n\n      addError(\n        index,\n        'OUT_SCOPE_DECISION_SOURCE',\n        'OUT_OF_SCOPE 不应有 decision_source'\n      );\n    }\n\n\n    if (isNullish(row.skip_reason)) {\n\n      addError(\n        index,\n        'OUT_SCOPE_SKIP_REASON',\n        'OUT_OF_SCOPE 必须有 skip_reason'\n      );\n    }\n\n\n    if (\n      row.input_tokens !== 0 ||\n      row.output_tokens !== 0 ||\n      row.total_tokens !== 0\n    ) {\n\n      addError(\n        index,\n        'OUT_SCOPE_TOKEN',\n        'OUT_OF_SCOPE 的 Token 必须全部为 0'\n      );\n    }\n\n\n    if (!isNullish(row.latency_ms)) {\n\n      addError(\n        index,\n        'OUT_SCOPE_LATENCY',\n        'OUT_OF_SCOPE 的 latency_ms 应为空'\n      );\n    }\n\n\n    continue;\n  }\n\n\n  // ==========================================================\n  // G. IN_SCOPE 基础规则\n  // ==========================================================\n\n  if (row.analysis_scope === 'IN_SCOPE') {\n\n    if (row.analysis_status === 'SKIPPED') {\n\n      addError(\n        index,\n        'IN_SCOPE_SKIPPED',\n        'IN_SCOPE 不应该出现 SKIPPED'\n      );\n    }\n\n\n    // ========================================================\n    // G1. AI_REQUIRED Path\n    // ========================================================\n\n    if (row.need_ai === true) {\n\n      aiPathCount++;\n\n\n      if (row.ai_called !== true) {\n\n        addError(\n          index,\n          'AI_PATH_NOT_CALLED',\n          'need_ai=true 时 ai_called 应为 true'\n        );\n      }\n\n\n      if (isNullish(row.prompt_version)) {\n\n        addError(\n          index,\n          'AI_PATH_PROMPT_VERSION',\n          'AI调用记录必须有 prompt_version'\n        );\n      }\n\n\n      if (isNullish(row.model_name)) {\n\n        addError(\n          index,\n          'AI_PATH_MODEL_NAME',\n          'AI调用记录必须有 model_name'\n        );\n      }\n\n\n      // AI 成功时必须有完整语义结果\n      if (row.analysis_status === 'SUCCESS') {\n\n        if (isNullish(row.ai_category)) {\n\n          addError(\n            index,\n            'AI_CATEGORY_EMPTY',\n            'SUCCESS 的 AI记录必须有 ai_category'\n          );\n        }\n\n\n        if (isNullish(row.ai_sentiment)) {\n\n          addError(\n            index,\n            'AI_SENTIMENT_EMPTY',\n            'SUCCESS 的 AI记录必须有 ai_sentiment'\n          );\n        }\n\n\n        if (isNullish(row.ai_risk_level)) {\n\n          addError(\n            index,\n            'AI_RISK_EMPTY',\n            'SUCCESS 的 AI记录必须有 ai_risk_level'\n          );\n        }\n\n\n        if (isNullish(row.final_risk_level)) {\n\n          addError(\n            index,\n            'FINAL_RISK_EMPTY',\n            'SUCCESS 的 AI记录必须有 final_risk_level'\n          );\n        }\n\n\n        if (\n          typeof row.total_tokens !== 'number' ||\n          row.total_tokens <= 0\n        ) {\n\n          addError(\n            index,\n            'AI_TOKEN_INVALID',\n            `AI成功调用 total_tokens 应 > 0，实际=${row.total_tokens}`\n          );\n        }\n\n\n        if (\n          typeof row.latency_ms !== 'number' ||\n          row.latency_ms <= 0\n        ) {\n\n          addError(\n            index,\n            'AI_LATENCY_INVALID',\n            `AI成功调用 latency_ms 应 > 0，实际=${row.latency_ms}`\n          );\n        }\n      }\n\n\n      // AI失败必须要求人工复核\n      if (\n        row.analysis_status === 'ERROR' &&\n        row.manual_review_required !== true\n      ) {\n\n        addError(\n          index,\n          'AI_ERROR_MANUAL_REVIEW',\n          'AI分析 ERROR 时 manual_review_required 必须为 true'\n        );\n      }\n\n\n      continue;\n    }\n\n\n    // ========================================================\n    // G2. RULE_ONLY Path\n    // ========================================================\n\n    if (row.need_ai === false) {\n\n      ruleOnlyCount++;\n\n\n      if (row.ai_called !== false) {\n\n        addError(\n          index,\n          'RULE_ONLY_AI_CALLED',\n          'RULE_ONLY 不允许调用 AI'\n        );\n      }\n\n\n      if (!isNullish(row.model_name)) {\n\n        addError(\n          index,\n          'RULE_ONLY_MODEL',\n          'RULE_ONLY 的 model_name 应为空'\n        );\n      }\n\n\n      if (!isNullish(row.prompt_version)) {\n\n        addError(\n          index,\n          'RULE_ONLY_PROMPT',\n          'RULE_ONLY 的 prompt_version 应为空'\n        );\n      }\n\n\n      if (\n        row.input_tokens !== 0 ||\n        row.output_tokens !== 0 ||\n        row.total_tokens !== 0\n      ) {\n\n        addError(\n          index,\n          'RULE_ONLY_TOKEN',\n          'RULE_ONLY 的 Token 必须全部为 0'\n        );\n      }\n\n\n      if (!isNullish(row.latency_ms)) {\n\n        addError(\n          index,\n          'RULE_ONLY_LATENCY',\n          'RULE_ONLY 的 latency_ms 应为空'\n        );\n      }\n\n\n      if (\n        row.analysis_status === 'SUCCESS' &&\n        isNullish(row.final_risk_level)\n      ) {\n\n        addError(\n          index,\n          'RULE_ONLY_FINAL_RISK',\n          'RULE_ONLY SUCCESS 必须有 final_risk_level'\n        );\n      }\n\n\n      if (\n        row.analysis_status === 'SUCCESS' &&\n        row.decision_source !== 'RULE'\n      ) {\n\n        addError(\n          index,\n          'RULE_ONLY_SOURCE',\n          `RULE_ONLY SUCCESS 的 decision_source 应为 RULE，实际=${row.decision_source}`\n        );\n      }\n\n\n      continue;\n    }\n\n\n    // need_ai 既不是 true 也不是 false\n    addError(\n      index,\n      'NEED_AI_INVALID',\n      `IN_SCOPE 的 need_ai 必须是 boolean，实际=${row.need_ai}`\n    );\n  }\n}\n\n\n// ============================================================\n// 8. analysis_run_id 批次一致性\n//\n// 同一次完整 workflow execution 产生的 57 条\n// 应共享同一个 analysis_run_id。\n// ============================================================\n\nif (analysisRunIds.size !== 1) {\n\n  errors.push(\n    `[RUN_ID_MISMATCH] 本批数据出现 ${analysisRunIds.size} 个 analysis_run_id：${Array.from(analysisRunIds).join(', ')}`\n  );\n}\n\n\n// ============================================================\n// 9. 三路径总数再次对账\n// ============================================================\n\nconst classifiedCount =\n  aiPathCount +\n  ruleOnlyCount +\n  outOfScopeCount;\n\nif (classifiedCount !== items.length) {\n\n  errors.push(\n    `[PATH_COUNT] AI=${aiPathCount} + RULE_ONLY=${ruleOnlyCount} + OUT_OF_SCOPE=${outOfScopeCount} = ${classifiedCount}，但总记录=${items.length}`\n  );\n}\n\n\n// ============================================================\n// 10. 汇总信息\n// ============================================================\n\nconst summary = {\n  total_records:\n    items.length,\n\n  source_mapper_records:\n    sourceMapperCount,\n\n  ai_path_count:\n    aiPathCount,\n\n  rule_only_count:\n    ruleOnlyCount,\n\n  out_of_scope_count:\n    outOfScopeCount,\n\n  success_count:\n    successCount,\n\n  skipped_count:\n    skippedCount,\n\n  error_count:\n    errorCount,\n\n  unique_analysis_ids:\n    analysisIdMap.size,\n\n  unique_content_keys:\n    contentKeyMap.size,\n\n  analysis_run_ids:\n    Array.from(analysisRunIds),\n\n  warning_count:\n    warnings.length,\n\n  error_count_validation:\n    errors.length,\n};\n\n\n// ============================================================\n// 11. FAIL FAST（快速失败）\n//\n// 正式运行模式：\n// 只要写入前校验发现错误，立即终止流程，\n// 禁止错误数据继续写入飞书。\n// ============================================================\n\nif (errors.length > 0) {\n  throw new Error(\n    'Analysis Records Validation v1.0 FAILED\\n\\n' +\n    errors.join('\\n')\n  );\n}\n\n\n// ============================================================\n// 12. PASS\n//\n// 不增加任何字段。\n// 原样返回 57 条，供下一步写飞书。\n// ============================================================\n\nconsole.log(\n  'Analysis Records Validation v1.0 PASS',\n  summary\n);\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2032,
+        -80
+      ],
+      "id": "7f34e438-5f67-4c77-bd84-ccb6d8f38ecd",
+      "name": "Analysis Records Validation v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    raw_id,\n\n    content_key,\n    platform,\n    shop_id,\n    shop_name,\n    content_id,\n\n    product_id,\n    product_name,\n    sku_id,\n    sku_name,\n\n    product_rating,\n    service_rating,\n    logistics_rating,\n    rating_scale_max,\n    rating_label,\n\n    content_text,\n    content_time,\n    collect_time,\n\n    data_source,\n    processing_status,\n\n    content_type,\n    root_review_id,\n    parent_content_id,\n\n    author_role,\n    author_id,\n\n    retry_count,\n    last_error_stage,\n    last_error_message,\n    processed_at,\n    pipeline_run_id,\n\n    source_staging_id,\n    source_review_id\n\nFROM voc.raw_reviews\nWHERE processing_status = 'NEW'\nORDER BY content_time ASC, raw_id ASC;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -976,
+        224
+      ],
+      "id": "05162c16-b64c-4d16-8837-c534b641e94f",
+      "name": "Read Pending Raw Reviews",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst CURRENT_PROMPT_VERSION = 'review-v1.0';\nconst CURRENT_MODEL_NAME = 'DeepSeek V4.1 Flash';\n\nfunction clean(v) {\n  if (v === undefined || v === null) return null;\n  return String(v).trim();\n}\n\nconst output = items.map((item) => {\n  const row = item.json;\n\n  const contentKey = clean(row.content_key);\n  const analysisScope = clean(row.analysis_scope);\n  const currentRulesVersion = clean(row.rules_version);\n\n  const existingAnalysisId = clean(row.existing_analysis_id);\n  const existingStatus = clean(row.existing_analysis_status);\n  const existingRulesVersion = clean(row.existing_rules_version);\n  const existingPromptVersion = clean(row.existing_prompt_version);\n  const existingModelName = clean(row.existing_model_name);\n  const existingScope = clean(row.existing_analysis_scope);\n\n  const currentNeedAi = row.need_ai === true;\n  const existingNeedAi = row.existing_need_ai === true;\n\n  let action = null;\n  let reason = null;\n\n  // 基础保护\n  if (!contentKey) {\n    action = 'REVIEW_REQUIRED';\n    reason = 'MISSING_CONTENT_KEY';\n  }\n\n  // 从未分析过\n  else if (!existingAnalysisId) {\n    action = 'PROCESS_REQUIRED';\n    reason = 'NO_CURRENT_ANALYSIS';\n  }\n\n  // 规则版本发生变化\n  else if (existingRulesVersion !== currentRulesVersion) {\n    action = 'PROCESS_REQUIRED';\n    reason = 'RULES_VERSION_CHANGED';\n  }\n\n  // OUT_OF_SCOPE：只由规则决定，不关心 Prompt / Model\n  else if (analysisScope === 'OUT_OF_SCOPE') {\n    if (\n      existingScope === 'OUT_OF_SCOPE' &&\n      existingStatus === 'SKIPPED'\n    ) {\n      action = 'SKIP_UP_TO_DATE';\n      reason = 'EXISTING_OUT_OF_SCOPE_IS_CURRENT';\n    } else {\n      action = 'PROCESS_REQUIRED';\n      reason = 'SCOPE_OR_STATUS_CHANGED';\n    }\n  }\n\n  // IN_SCOPE + RULE_ONLY\n  else if (\n    analysisScope === 'IN_SCOPE' &&\n    currentNeedAi === false\n  ) {\n    if (\n      existingScope === 'IN_SCOPE' &&\n      existingStatus === 'SUCCESS' &&\n      existingNeedAi === false\n    ) {\n      action = 'SKIP_UP_TO_DATE';\n      reason = 'EXISTING_RULE_ONLY_IS_CURRENT';\n    } else {\n      action = 'PROCESS_REQUIRED';\n      reason = 'ANALYSIS_PATH_CHANGED';\n    }\n  }\n\n  // IN_SCOPE + AI_REQUIRED\n  else if (\n    analysisScope === 'IN_SCOPE' &&\n    currentNeedAi === true\n  ) {\n    if (\n      existingScope !== 'IN_SCOPE' ||\n      existingStatus !== 'SUCCESS' ||\n      existingNeedAi !== true\n    ) {\n      action = 'PROCESS_REQUIRED';\n      reason = 'ANALYSIS_PATH_OR_STATUS_CHANGED';\n    } else if (\n      existingPromptVersion !== CURRENT_PROMPT_VERSION\n    ) {\n      action = 'PROCESS_REQUIRED';\n      reason = 'PROMPT_VERSION_CHANGED';\n    } else if (\n      existingModelName !== CURRENT_MODEL_NAME\n    ) {\n      action = 'PROCESS_REQUIRED';\n      reason = 'MODEL_CHANGED';\n    } else {\n      action = 'SKIP_UP_TO_DATE';\n      reason = 'EXISTING_AI_ANALYSIS_IS_CURRENT';\n    }\n  }\n\n  // 理论上不应进入\n  else {\n    action = 'REVIEW_REQUIRED';\n    reason = 'UNEXPECTED_PRE_ANALYSIS_STATE';\n  }\n\n  return {\n    json: {\n      ...row,\n\n      pre_analysis_action: action,\n      pre_analysis_reason: reason,\n\n      current_rules_version: currentRulesVersion,\n      current_prompt_version: CURRENT_PROMPT_VERSION,\n      current_model_name: CURRENT_MODEL_NAME\n    }\n  };\n});\n\nreturn output;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        224
+      ],
+      "id": "a2fc4eaf-4b4b-4b91-a8c7-579b3f324e62",
+      "name": "Pre-Analysis Idempotency Gate v2.0"
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 3,
+        "output": "={{ \n  $json.pre_analysis_action === 'PROCESS_REQUIRED'\n    ? 0\n    : $json.pre_analysis_action === 'SKIP_UP_TO_DATE'\n      ? 1\n      : 2\n}}"
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        208
+      ],
+      "id": "7dd39f9b-d99a-453a-b518-656373f6226d",
+      "name": "Route Pre-Analysis v2.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.raw_reviews\nSET\n    processing_status = 'PROCESSED',\n    processed_at = CURRENT_TIMESTAMP,\n    pipeline_run_id = $2,\n    last_error_stage = NULL,\n    last_error_message = NULL\nWHERE content_key = $1\n  AND processing_status = 'NEW'\nRETURNING\n    raw_id,\n    content_key,\n    processing_status,\n    processed_at,\n    pipeline_run_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.content_key,   $json.analysis_run_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2800,
+        240
+      ],
+      "id": "f85db1e5-f70e-406f-b2f8-24b552277554",
+      "name": "Mark Raw Reviews Processed v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n    raw_id,\n    content_key,\n    processing_status,\n    processed_at,\n    pipeline_run_id,\n    COUNT(*) FILTER (\n        WHERE processing_status = 'NEW'\n    ) OVER () AS total_new,\n    COUNT(*) FILTER (\n        WHERE processing_status = 'PROCESSED'\n    ) OVER () AS total_processed\nFROM voc.raw_reviews\nORDER BY raw_id;",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        3024,
+        240
+      ],
+      "id": "3f0667bf-220b-4381-ac1d-2dfd2bbe4f97",
+      "name": "Verify Raw Reviews Completion v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Prepare Skip Raw Processed Update v1.0\n//\n// 场景：\n// PostgreSQL raw_reviews 仍然是 NEW，\n// 但飞书 AI_Analysis 已经存在最新有效分析。\n//\n// 所以：\n// - 不重新调用 AI\n// - 不重新写 AI_Analysis\n// - 只补做 raw_reviews → PROCESSED\n// ============================================================\n\nconst row = $json;\n\nif (row.pre_analysis_action !== 'SKIP_UP_TO_DATE') {\n  throw new Error(\n    `Prepare Skip Raw Processed Update v1.0: 收到非 SKIP_UP_TO_DATE 数据，content_key=${row.content_key}`\n  );\n}\n\nif (!row.content_key) {\n  throw new Error(\n    'Prepare Skip Raw Processed Update v1.0: 缺少 content_key'\n  );\n}\n\nreturn {\n  json: {\n    content_key: row.content_key,\n\n    // 已经存在的分析记录，仅用于追踪\n    analysis_id:\n      row.existing_analysis_id ?? null,\n\n    feishu_analysis_record_id:\n      row.existing_analysis_record_id ?? null,\n\n    // 当前这一次工作流负责把 RAW 补标完成\n    analysis_run_id:\n      `N8N_${$execution.id}`\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        544
+      ],
+      "id": "4752e3e1-d9c6-4284-9f7c-96e03ae47731",
+      "name": "Prepare Skip Raw Processed Update v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.raw_reviews\nSET\n    processing_status = 'PROCESSED',\n    processed_at = CURRENT_TIMESTAMP,\n    pipeline_run_id = $2,\n    last_error_stage = NULL,\n    last_error_message = NULL\nWHERE content_key = $1\n  AND processing_status = 'NEW'\nRETURNING\n    raw_id,\n    content_key,\n    processing_status,\n    processed_at,\n    pipeline_run_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.content_key,   $json.analysis_run_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        736,
+        704
+      ],
+      "id": "9b8872bf-7700-4cd8-b481-7615631a19ea",
+      "name": "Mark Raw Reviews Processed - Skip v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Prepare Analysis Route Error v1.0\n//\n// 职责：\n// Route Analysis Path 无法归入任何正常业务分支时，\n// 生成明确错误信息，供 PostgreSQL raw_reviews 标记 ERROR。\n// ============================================================\n\nconst row = $json;\n\nif (\n  row.raw_id === undefined ||\n  row.raw_id === null ||\n  row.raw_id === ''\n) {\n  throw new Error(\n    `Prepare Analysis Route Error v1.0: 缺少 raw_id，content_key=${row.content_key}`\n  );\n}\n\nif (!row.content_key) {\n  throw new Error(\n    `Prepare Analysis Route Error v1.0: 缺少 content_key，raw_id=${row.raw_id}`\n  );\n}\n\nconst pipelineRunId =\n  `N8N_${$execution.id}`;\n\nconst errorMessage =\n  [\n    'UNMATCHED_ANALYSIS_PATH',\n    `analysis_scope=${row.analysis_scope ?? 'null'}`,\n    `need_ai=${row.need_ai ?? 'null'}`,\n    `rule_decision=${row.rule_decision ?? 'null'}`,\n    `rule_risk_level=${row.rule_risk_level ?? 'null'}`\n  ].join(' | ');\n\nreturn {\n  json: {\n    raw_id: row.raw_id,\n    content_key: row.content_key,\n    pipeline_run_id: pipelineRunId,\n\n    // 继续沿用现有 last_error_stage 枚举，\n    // 这里属于规则/路由判断阶段。\n    error_stage: 'RULE',\n\n    error_message: errorMessage\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        384
+      ],
+      "id": "0ab31301-fe0a-42e2-b87e-8e047a48eb95",
+      "name": "Prepare Analysis Route Error v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.raw_reviews\nSET\n    processing_status = 'ERROR',\n    retry_count = COALESCE(retry_count, 0) + 1,\n    last_error_stage = $2,\n    last_error_message = $3,\n    pipeline_run_id = $4\nWHERE raw_id = $1\n  AND processing_status = 'NEW'\nRETURNING\n    raw_id,\n    content_key,\n    processing_status,\n    retry_count,\n    last_error_stage,\n    last_error_message,\n    pipeline_run_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.raw_id,   $json.error_stage,   $json.error_message,   $json.pipeline_run_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        896,
+        576
+      ],
+      "id": "12179ebe-5739-4716-b343-7b2948e23764",
+      "name": "Mark Raw Review Analysis Route Error v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Prepare Pre-Analysis Route Error v1.0\n//\n// 职责：\n// Pre-Analysis Gate 返回非正常动作时，\n// 整理错误信息，供 PostgreSQL raw_reviews 标记 ERROR。\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. 基础校验\n// ============================================================\n\nif (\n  row.raw_id === undefined ||\n  row.raw_id === null ||\n  row.raw_id === ''\n) {\n  throw new Error(\n    `Prepare Pre-Analysis Route Error v1.0: 缺少 raw_id，content_key=${row.content_key}`\n  );\n}\n\nif (!row.content_key) {\n  throw new Error(\n    `Prepare Pre-Analysis Route Error v1.0: 缺少 content_key，raw_id=${row.raw_id}`\n  );\n}\n\n\n// ============================================================\n// 2. 防御性检查\n//\n// 正常动作不应该进入这个分支。\n// ============================================================\n\nif (\n  row.pre_analysis_action === 'PROCESS_REQUIRED'\n  || row.pre_analysis_action === 'SKIP_UP_TO_DATE'\n) {\n  throw new Error(\n    `Prepare Pre-Analysis Route Error v1.0: 正常动作误入异常分支，action=${row.pre_analysis_action}, content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 3. 错误上下文\n// ============================================================\n\nconst pipelineRunId =\n  `N8N_${$execution.id}`;\n\nconst errorMessage =\n  [\n    'PRE_ANALYSIS_ROUTE_ERROR',\n    `action=${row.pre_analysis_action ?? 'null'}`,\n    `reason=${row.pre_analysis_reason ?? 'null'}`,\n    `existing_analysis_id=${row.existing_analysis_id ?? 'null'}`,\n    `existing_analysis_status=${row.existing_analysis_status ?? 'null'}`,\n    `current_rules_version=${row.current_rules_version ?? row.rules_version ?? 'null'}`,\n    `current_prompt_version=${row.current_prompt_version ?? 'null'}`,\n    `current_model_name=${row.current_model_name ?? 'null'}`\n  ].join(' | ');\n\n\n// ============================================================\n// 4. 输出\n// ============================================================\n\nreturn {\n  json: {\n    raw_id: row.raw_id,\n    content_key: row.content_key,\n    pipeline_run_id: pipelineRunId,\n\n    // 这里属于流程判断 / 幂等路由阶段，\n    // 不是 AI 模型调用错误，也不是采集错误。\n    error_stage: 'RULE',\n\n    error_message: errorMessage\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        720
+      ],
+      "id": "b5d27273-4d0c-485f-a242-7cbc3150acba",
+      "name": "Prepare Pre-Analysis Route Error v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE voc.raw_reviews\nSET\n    processing_status = 'ERROR',\n    retry_count = COALESCE(retry_count, 0) + 1,\n    last_error_stage = $2,\n    last_error_message = $3,\n    pipeline_run_id = $4\nWHERE raw_id = $1\n  AND processing_status = 'NEW'\nRETURNING\n    raw_id,\n    content_key,\n    processing_status,\n    retry_count,\n    last_error_stage,\n    last_error_message,\n    pipeline_run_id;",
+        "options": {
+          "queryReplacement": "={{ [   $json.raw_id,   $json.error_stage,   $json.error_message,   $json.pipeline_run_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        672,
+        880
+      ],
+      "id": "3e47c321-ca36-44ad-86f6-0f18af1adeec",
+      "name": "Mark Raw Review Pre-Analysis Error v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// ============================================================\n// Prepare PostgreSQL Analysis Record v1.0\n//\n// 职责：\n// 将 AI_Analysis V1 标准记录转换成\n// voc.write_analysis_result(p_record jsonb)\n// 需要的 PostgreSQL JSON 结构。\n//\n// 本节点：\n// - 不写数据库\n// - 不改变业务判断\n// - 只做类型转换与严格校验\n// ============================================================\n\nconst row = $json;\n\n\n// ============================================================\n// 1. 基础必填字段\n// ============================================================\n\nconst requiredFields = [\n  'content_key',\n  'rules_version',\n  'analysis_scope',\n  'analysis_status',\n  'analyzed_at',\n  'rule_hit',\n  'need_ai',\n  'ai_called',\n  'manual_review_required'\n];\n\nfor (const field of requiredFields) {\n  if (\n    row[field] === undefined ||\n    row[field] === null\n  ) {\n    throw new Error(\n      `Prepare PostgreSQL Analysis Record v1.0: 缺少必填字段 ${field}, content_key=${row.content_key ?? 'UNKNOWN'}`\n    );\n  }\n}\n\n\n// ============================================================\n// 2. rule_tags\n//\n// 当前 Builder 输出仍可能是 JSON 字符串：\n// '[\"A\",\"B\"]'\n//\n// PostgreSQL Writer 要真正 JSON array。\n// ============================================================\n\nlet ruleTags = null;\n\nif (row.rule_tags === null || row.rule_tags === undefined || row.rule_tags === '') {\n\n  ruleTags = null;\n\n} else if (Array.isArray(row.rule_tags)) {\n\n  ruleTags = row.rule_tags;\n\n} else if (typeof row.rule_tags === 'string') {\n\n  let parsed;\n\n  try {\n    parsed = JSON.parse(row.rule_tags);\n  } catch {\n    throw new Error(\n      `Prepare PostgreSQL Analysis Record v1.0: rule_tags 不是合法 JSON，content_key=${row.content_key}`\n    );\n  }\n\n  if (!Array.isArray(parsed)) {\n    throw new Error(\n      `Prepare PostgreSQL Analysis Record v1.0: rule_tags JSON 不是 array，content_key=${row.content_key}`\n    );\n  }\n\n  ruleTags = parsed;\n\n} else {\n\n  throw new Error(\n    `Prepare PostgreSQL Analysis Record v1.0: rule_tags 类型非法，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 3. Token 类型保护\n//\n// NULL 保持 NULL。\n// 0 保持 0。\n// 禁止 undefined 被默认为 0。\n// ============================================================\n\nfunction nullableNumber(value, fieldName) {\n\n  if (value === undefined || value === null || value === '') {\n    return null;\n  }\n\n  const n = Number(value);\n\n  if (!Number.isFinite(n)) {\n    throw new Error(\n      `Prepare PostgreSQL Analysis Record v1.0: ${fieldName} 不是合法数字，content_key=${row.content_key}`\n    );\n  }\n\n  return n;\n}\n\nconst inputTokens =\n  nullableNumber(row.input_tokens, 'input_tokens');\n\nconst outputTokens =\n  nullableNumber(row.output_tokens, 'output_tokens');\n\nconst totalTokens =\n  nullableNumber(row.total_tokens, 'total_tokens');\n\nconst latencyMs =\n  nullableNumber(row.latency_ms, 'latency_ms');\n\nconst confidence =\n  nullableNumber(row.confidence, 'confidence');\n\n\n// ============================================================\n// 4. Scope / Status 不做业务修正\n// ============================================================\n\nif (\n  row.analysis_scope === 'OUT_OF_SCOPE' &&\n  row.analysis_status !== 'SKIPPED'\n) {\n  throw new Error(\n    `Prepare PostgreSQL Analysis Record v1.0: OUT_OF_SCOPE 必须为 SKIPPED，content_key=${row.content_key}`\n  );\n}\n\nif (\n  row.analysis_scope === 'IN_SCOPE' &&\n  row.analysis_status === 'SUCCESS' &&\n  (row.final_risk_level === null || row.final_risk_level === undefined || row.final_risk_level === '')\n) {\n  throw new Error(\n    `Prepare PostgreSQL Analysis Record v1.0: IN_SCOPE + SUCCESS 缺少 final_risk_level，content_key=${row.content_key}`\n  );\n}\n\n\n// ============================================================\n// 5. 输出 Writer JSON\n//\n// 不传：\n// analysis_id\n// is_current\n// created_at\n// updated_at\n//\n// 这些由 PostgreSQL 管理。\n// ============================================================\n\nreturn {\n  json: {\n    content_key:\n      row.content_key,\n\n    analysis_run_id:\n      row.analysis_run_id ?? null,\n\n    analyzed_at:\n      row.analyzed_at,\n\n    rules_version:\n      row.rules_version,\n\n    prompt_version:\n      row.prompt_version ?? null,\n\n    model_name:\n      row.model_name ?? null,\n\n    rule_hit:\n      Boolean(row.rule_hit),\n\n    rule_tags:\n      ruleTags,\n\n    rule_risk_level:\n      row.rule_risk_level ?? null,\n\n    need_ai:\n      Boolean(row.need_ai),\n\n    ai_called:\n      Boolean(row.ai_called),\n\n    ai_category:\n      row.ai_category ?? null,\n\n    ai_subcategory:\n      row.ai_subcategory ?? null,\n\n    ai_sentiment:\n      row.ai_sentiment ?? null,\n\n    ai_risk_level:\n      row.ai_risk_level ?? null,\n\n    ai_summary:\n      row.ai_summary ?? null,\n\n    confidence:\n      confidence,\n\n    final_category:\n      row.final_category ?? null,\n\n    final_subcategory:\n      row.final_subcategory ?? null,\n\n    final_sentiment:\n      row.final_sentiment ?? null,\n\n    final_risk_level:\n      row.final_risk_level ?? null,\n\n    final_summary:\n      row.final_summary ?? null,\n\n    decision_source:\n      row.decision_source ?? null,\n\n    input_tokens:\n      inputTokens,\n\n    output_tokens:\n      outputTokens,\n\n    total_tokens:\n      totalTokens,\n\n    latency_ms:\n      latencyMs,\n\n    analysis_scope:\n      row.analysis_scope,\n\n    analysis_status:\n      row.analysis_status,\n\n    skip_reason:\n      row.skip_reason ?? null,\n\n    manual_review_required:\n      Boolean(row.manual_review_required),\n\n    error_message:\n      row.error_message ?? null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        240
+      ],
+      "id": "2b962fbe-30f4-4508-87a9-ededfd9df979",
+      "name": "Prepare PostgreSQL Analysis Record v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT *\nFROM voc.write_analysis_result($1::jsonb);",
+        "options": {
+          "queryReplacement": "={{ [   JSON.stringify($json) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2496,
+        240
+      ],
+      "id": "b9c3b1cb-cfb3-4394-b2cc-883b76a51a86",
+      "name": "Write PostgreSQL Analysis Result v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH input_data AS (\n    SELECT $1::jsonb AS candidate\n),\ncurrent_analysis AS (\n    SELECT\n        ar.analysis_id,\n        ar.content_key,\n        ar.analysis_run_id,\n        ar.rules_version,\n        ar.prompt_version,\n        ar.model_name,\n        ar.analysis_scope,\n        ar.analysis_status,\n        ar.final_risk_level,\n        ar.need_ai,\n        ar.ai_called,\n        ar.decision_source,\n        ar.is_current,\n        ar.analyzed_at\n    FROM voc.analysis_results ar\n    CROSS JOIN input_data i\n    WHERE ar.content_key = i.candidate->>'content_key'\n      AND ar.is_current = TRUE\n    LIMIT 1\n)\nSELECT\n    i.candidate,\n\n    ca.analysis_id::text AS existing_analysis_id,\n    ca.analysis_status AS existing_analysis_status,\n    ca.rules_version AS existing_rules_version,\n    ca.prompt_version AS existing_prompt_version,\n    ca.model_name AS existing_model_name,\n    ca.analysis_scope AS existing_analysis_scope,\n    ca.final_risk_level AS existing_final_risk_level,\n    ca.need_ai AS existing_need_ai,\n    ca.ai_called AS existing_ai_called,\n    ca.decision_source AS existing_decision_source,\n    ca.analysis_run_id AS existing_analysis_run_id,\n    ca.analyzed_at AS existing_analyzed_at\n\nFROM input_data i\nLEFT JOIN current_analysis ca ON TRUE;",
+        "options": {
+          "queryReplacement": "={{ [   JSON.stringify($json) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -416,
+        224
+      ],
+      "id": "e7c249cf-5121-4438-a241-4901df81db55",
+      "name": "Read Current Analysis - PostgreSQL v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = $json;\nconst candidate = row.candidate ?? {};\n\nreturn {\n  json: {\n    ...candidate,\n\n    existing_analysis_id:\n      row.existing_analysis_id ?? null,\n\n    existing_analysis_status:\n      row.existing_analysis_status ?? null,\n\n    existing_rules_version:\n      row.existing_rules_version ?? null,\n\n    existing_prompt_version:\n      row.existing_prompt_version ?? null,\n\n    existing_model_name:\n      row.existing_model_name ?? null,\n\n    existing_analysis_scope:\n      row.existing_analysis_scope ?? null,\n\n    existing_final_risk_level:\n      row.existing_final_risk_level ?? null,\n\n    existing_need_ai:\n      row.existing_need_ai ?? null,\n\n    existing_ai_called:\n      row.existing_ai_called ?? null,\n\n    existing_decision_source:\n      row.existing_decision_source ?? null,\n\n    existing_analysis_run_id:\n      row.existing_analysis_run_id ?? null,\n\n    existing_analyzed_at:\n      row.existing_analyzed_at ?? null\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -208,
+        224
+      ],
+      "id": "562a586e-1b8b-43d7-8d1a-98439ddf118a",
+      "name": "Flatten Pre-Analysis Context v1.0"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1152,
+        432
+      ],
+      "id": "85d60521-1597-4973-90fe-c482d24242a1",
+      "name": "Called by Orchestrator v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Raw Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Text v1.0": {
+      "main": [
+        [
+          {
+            "node": "Rule Engine v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rule Engine v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read Current Analysis - PostgreSQL v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Analysis Path v1.0": {
+      "main": [
+        [
+          {
+            "node": "Build AI Analysis Record - Out Of Scope Path v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Dify Payload v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build AI Analysis Record - Rule Only Path v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Analysis Route Error v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Dify Payload v1.0": {
+      "main": [
+        [
+          {
+            "node": "Call Dify Workflow v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call Dify Workflow v1.0": {
+      "main": [
+        [
+          {
+            "node": "Normalize Dify Response v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Dify Response v1.0": {
+      "main": [
+        [
+          {
+            "node": "Final Decision Engine v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Decision Engine v1.0": {
+      "main": [
+        [
+          {
+            "node": "Build AI Analysis Record - AI Path v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Analysis Record - Out Of Scope Path v1.0": {
+      "main": [
+        [
+          {
+            "node": "Analysis Records Validation v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Analysis Record - AI Path v1.0": {
+      "main": [
+        [
+          {
+            "node": "Analysis Records Validation v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Analysis Record - Rule Only Path v1.0": {
+      "main": [
+        [
+          {
+            "node": "Analysis Records Validation v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analysis Records Validation v1.0": {
+      "main": [
+        [
+          {
+            "node": "Prepare PostgreSQL Analysis Record v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Pending Raw Reviews": {
+      "main": [
+        [
+          {
+            "node": "Normalize Text v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pre-Analysis Idempotency Gate v2.0": {
+      "main": [
+        [
+          {
+            "node": "Route Pre-Analysis v2.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Pre-Analysis v2.0": {
+      "main": [
+        [
+          {
+            "node": "Route Analysis Path v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Skip Raw Processed Update v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Pre-Analysis Route Error v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Raw Reviews Processed v1.0": {
+      "main": [
+        [
+          {
+            "node": "Verify Raw Reviews Completion v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Skip Raw Processed Update v1.0": {
+      "main": [
+        [
+          {
+            "node": "Mark Raw Reviews Processed - Skip v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Analysis Route Error v1.0": {
+      "main": [
+        [
+          {
+            "node": "Mark Raw Review Analysis Route Error v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Pre-Analysis Route Error v1.0": {
+      "main": [
+        [
+          {
+            "node": "Mark Raw Review Pre-Analysis Error v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare PostgreSQL Analysis Record v1.0": {
+      "main": [
+        [
+          {
+            "node": "Write PostgreSQL Analysis Result v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write PostgreSQL Analysis Result v1.0": {
+      "main": [
+        [
+          {
+            "node": "Mark Raw Reviews Processed v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Current Analysis - PostgreSQL v1.0": {
+      "main": [
+        [
+          {
+            "node": "Flatten Pre-Analysis Context v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flatten Pre-Analysis Context v1.0": {
+      "main": [
+        [
+          {
+            "node": "Pre-Analysis Idempotency Gate v2.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called by Orchestrator v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read Pending Raw Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "306dd52f-b7c1-4c71-b85d-182ffd6a288d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "rNbHV9kJYMCdsp8x",
+  "tags": []
+}

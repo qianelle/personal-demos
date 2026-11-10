@@ -1,0 +1,388 @@
+{
+  "name": "VOC_99_Orchestrator_v1.0",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        -32
+      ],
+      "id": "affc5a29-ff37-484b-9a11-6923c5fa86b1",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "l5vEW8e0W1p2JgSX",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/l5vEW8e0W1p2JgSX",
+          "cachedResultName": "VOC_00_CSVLoader_v1"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        96,
+        -32
+      ],
+      "id": "238441cd-87bc-4064-bc91-edca7e469b8a",
+      "name": "Run VOC_00 CSVLoader v1.0",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "iq2YLEY6QC0qLf0i",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/iq2YLEY6QC0qLf0i",
+          "cachedResultName": "VOC_01_SourceAdapter_v1"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        320,
+        -32
+      ],
+      "id": "e4120013-c5ca-48d4-a053-a681157d27af",
+      "name": "Run VOC_01_SourceAdapter_v1",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "rNbHV9kJYMCdsp8x",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/rNbHV9kJYMCdsp8x",
+          "cachedResultName": "VOC_02_AnalysisPipeline_v1"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        768,
+        -32
+      ],
+      "id": "2f06adc4-6033-4dfd-b1d9-9fe650e4b666",
+      "name": "Run VOC_02 AnalysisPipeline v1.0",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "VOC03RISKSYNC000",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/VOC03RISKSYNC000",
+          "cachedResultName": "VOC_03_FeishuRiskSync_v1"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1264,
+        -32
+      ],
+      "id": "68935246-5451-4608-8a61-0d4b7797cb23",
+      "name": "Run VOC_03 FeishuRiskSync v1.0",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const voc03 = $input.first().json;\n\n// V03 当前无论最终返回 NOOP 报告还是写入报告，\n// 都优先读取整轮规划统计\nconst summary =\n  voc03.summary_all_actions ??\n  voc03.action_summary ??\n  {};\n\nconst CREATE = Number(summary.CREATE ?? 0);\nconst UPDATE = Number(summary.UPDATE ?? 0);\nconst INVALIDATE = Number(summary.INVALIDATE ?? 0);\nconst NOOP = Number(summary.NOOP ?? 0);\nconst ERROR = Number(summary.ERROR ?? 0);\n\nconst plannedWriteCount = CREATE + UPDATE + INVALIDATE;\n\n// V03 只有在实际写飞书成功、且没有规划错误时才会正常返回到 V99。\n// 因此 V99 能走到这里时，可把本轮计划写入数视为成功写入数。\nconst writeSuccess = ERROR === 0 ? plannedWriteCount : 0;\nconst writeFailed = ERROR;\n\nreturn [\n  {\n    json: {\n      pipeline: 'VOC_PIPELINE_V1',\n      status: ERROR === 0 ? 'SUCCESS' : 'FAILED',\n\n      stages: {\n        VOC_00_CSVLoader: 'SUCCESS',\n        VOC_01_SourceAdapter: 'SUCCESS',\n        VOC_02_AnalysisPipeline: 'SUCCESS',\n        VOC_03_FeishuRiskSync: ERROR === 0 ? 'SUCCESS' : 'FAILED',\n      },\n\n      voc03_result: {\n        action_summary: {\n          CREATE,\n          UPDATE,\n          INVALIDATE,\n          NOOP,\n          ERROR,\n        },\n\n        planned_write_count: plannedWriteCount,\n        write_success: writeSuccess,\n        write_failed: writeFailed,\n      },\n\n      completed_at: new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        -32
+      ],
+      "id": "6bf2b6ab-a4a2-4b41-b379-712045bfc2e2",
+      "name": "Build Pipeline Completion v1.0"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/rpa/file-ready",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -128,
+        192
+      ],
+      "id": "b795c0bf-369b-49c6-a552-546a8754f2d3",
+      "name": "RPA File Ready Webhook v1.0",
+      "webhookId": "fce9099e-06e3-4d4d-98ac-8297cd425b3d"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      upstream_workflow: 'VOC_01_SourceAdapter_v1',\n      status: 'COMPLETED'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        -32
+      ],
+      "id": "f20cfccf-789c-48e1-807e-9e22437436cb",
+      "name": "Collapse VOC_01 Result v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  {\n    json: {\n      upstream_workflow: 'VOC_02_AnalysisPipeline_v1',\n      status: 'COMPLETED'\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        -32
+      ],
+      "id": "d937fa79-21da-49ef-b049-a9f4a6f00135",
+      "name": "Collapse VOC_02 Result v1.0"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "88d0f09f-36cc-450e-992a-c78cb058802b",
+              "name": "source_name",
+              "value": "QIANNU_MOCK",
+              "type": "string"
+            },
+            {
+              "id": "7210eab6-b0e3-4d48-b3a6-d953eb49e616",
+              "name": "source_platform",
+              "value": "淘宝/天猫",
+              "type": "string"
+            },
+            {
+              "id": "98127472-2781-4624-ab32-a1f745a023b3",
+              "name": "query_shop_name",
+              "value": "={{ null }}",
+              "type": "string"
+            },
+            {
+              "id": "f640fe22-c766-4888-bb6e-fcf147f13fd4",
+              "name": "collection_scope",
+              "value": "INCREMENTAL",
+              "type": "string"
+            },
+            {
+              "id": "71d5d9d7-cd84-4ac7-b935-6ff41aed74a3",
+              "name": "timezone",
+              "value": "Asia/Shanghai",
+              "type": "string"
+            },
+            {
+              "id": "a89a91e0-a6ed-4590-ae17-06fecbce5730",
+              "name": "run_slot",
+              "value": "AFTERNOON",
+              "type": "string"
+            },
+            {
+              "id": "42bbcd53-3e2e-46a1-892d-4266591c75bd",
+              "name": "query_start_date",
+              "value": "2026-10-10",
+              "type": "string"
+            },
+            {
+              "id": "3bbf8b90-8fd5-417c-a892-f1649921468b",
+              "name": "query_end_date",
+              "value": "2026-10-10",
+              "type": "string"
+            },
+            {
+              "id": "6a06e373-4c36-49c6-917f-e2f2e11d22c4",
+              "name": "file_name",
+              "value": "reviews_20261010_194433.csv",
+              "type": "string"
+            },
+            {
+              "id": "e5e36e0d-6aa2-439f-bc95-9b348f4a3974",
+              "name": "run_status",
+              "value": "SUCCESS",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -128,
+        -32
+      ],
+      "id": "7decf153-24b8-44e2-9f9b-d21be6bf9d2f",
+      "name": "Manual Test Config v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Manual Test Config v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run VOC_00 CSVLoader v1.0": {
+      "main": [
+        [
+          {
+            "node": "Run VOC_01_SourceAdapter_v1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run VOC_01_SourceAdapter_v1": {
+      "main": [
+        [
+          {
+            "node": "Collapse VOC_01 Result v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run VOC_02 AnalysisPipeline v1.0": {
+      "main": [
+        [
+          {
+            "node": "Collapse VOC_02 Result v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run VOC_03 FeishuRiskSync v1.0": {
+      "main": [
+        [
+          {
+            "node": "Build Pipeline Completion v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RPA File Ready Webhook v1.0": {
+      "main": [
+        [
+          {
+            "node": "Run VOC_00 CSVLoader v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse VOC_01 Result v1.0": {
+      "main": [
+        [
+          {
+            "node": "Run VOC_02 AnalysisPipeline v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse VOC_02 Result v1.0": {
+      "main": [
+        [
+          {
+            "node": "Run VOC_03 FeishuRiskSync v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test Config v1.0": {
+      "main": [
+        [
+          {
+            "node": "Run VOC_00 CSVLoader v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "807f0718-52f9-4fb3-b8ff-e5eedc7df2aa",
+  "meta": {
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "RNyhxqzQM52PzhHU",
+  "tags": []
+}

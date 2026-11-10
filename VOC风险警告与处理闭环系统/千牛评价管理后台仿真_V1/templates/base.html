@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}商家工作台 Demo{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">商</span>
+    <span class="brand-text">商家工作台 <em>Demo</em></span>
+  </div>
+  <div class="topbar-right">
+    <span class="topbar-user" id="topbar-user" data-testid="topbar-user">当前账号：{{ session.get('user') }}</span>
+
+    <div class="debug-wrap">
+      <button type="button" class="btn btn-ghost btn-sm" id="debug-toggle"
+              data-testid="debug-toggle" aria-haspopup="true">调试 ▾</button>
+      <div class="debug-dropdown" id="debug-dropdown" hidden>
+        <div class="debug-title">RPA 测试工具（仅 Demo 用）</div>
+        <button type="button" class="debug-item" id="session-expire"
+                data-testid="session-expire">模拟登录失效</button>
+        <a class="debug-item" id="logout" data-testid="logout" href="{{ url_for('logout') }}">退出登录</a>
+      </div>
+    </div>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <nav>
+      <ul>
+        {% for m in menus %}
+        <li>
+          <a href="{{ url_for(m.endpoint) }}"
+             class="menu-item {% if active == m.key %}is-active{% endif %}"
+             id="menu-{{ m.key }}" data-testid="menu-{{ m.key }}">{{ m.name }}</a>
+        </li>
+        {% endfor %}
+      </ul>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="side-note">本系统为本地仿真环境<br>仅供 RPA 自动化测试使用</div>
+    </div>
+  </aside>
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+  // 调试下拉
+  (function () {
+    var t = document.getElementById('debug-toggle');
+    var d = document.getElementById('debug-dropdown');
+    if (!t || !d) return;
+    t.addEventListener('click', function (e) {
+      e.stopPropagation();
+      d.hidden = !d.hidden;
+    });
+    document.addEventListener('click', function () { d.hidden = true; });
+
+    var exp = document.getElementById('session-expire');
+    if (exp) {
+      exp.addEventListener('click', function (e) {
+        e.preventDefault();
+        fetch('/api/session/expire', {method: 'POST'}).then(function () {
+          window.location.href = '/login';
+        });
+      });
+    }
+  })();
+
+  function showToast(msg, type) {
+    var el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'toast show' + (type ? ' toast-' + type : '');
+    el.hidden = false;
+    clearTimeout(el._t);
+    el._t = setTimeout(function () { el.hidden = true; }, 3000);
+  }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

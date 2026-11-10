@@ -1,0 +1,971 @@
+# -*- coding: utf-8 -*-
+"""
+仿真评价数据生成器
+------------------------------------------------------------------
+全部数据均为虚构：虚构店铺、虚构商品、虚构订单号、虚构（已脱敏）买家标识。
+不接入任何真实平台接口，不包含任何真实消费者个人信息。
+
+数据结构刻意对齐「店透视类插件导出」的宽表风格。
+
+Source Schema 已冻结（v1），语义为：
+
+    【一行 = 一个主评价线程】
+    review_text / review_time      主评价
+    append_review_text / append_review_time   追评（有则填，无则两列同时为空）
+
+硬约束：追评**不得**再被复制成一条独立的 review 行。
+（历史问题：曾把已带追评的初评再生成一条 review_type=追评 的独立行，
+ 并复用同一 order_id / buyer_id / item_id，导致同一条追评内容在导出文件中
+ 出现两次 —— 一次作为父行的 append_review_text，一次作为独立行的 review_text。
+ 这会让下游 VOC Source Mapper 把同一条追评重复拆分、重复分析。该逻辑已删除。）
+
+因此 review_type 不再表示「独立的追评事件行」，而是表示该线程是否含追评：
+    "初评" = 该线程仅含主评价（append 两列为空）
+    "追评" = 该线程含追评内容（append 两列非空）
+
+演示事件（DEMO_EVENT_PLAN / DEMO_FOLLOWUP_PLAN）：
+    在既有 176 条之外追加 7 个业务事件，专门用于验证两条真实的采集链路：
+        - 昨日（D-1）完整补采
+        - 当天（D0）滚动增量采集
+    事件时间按「距 Demo 时钟今天（SIM_BASE_DATE）的天数」表达，D0 / D-1
+    在项目时间下精确落地为 2026-10-09 / 2026-10-08。
+
+    事件构成：5 个新评价线程（3 条 D-1 + 2 条 D0）+ 2 个旧线程新增追评
+    （1 条 D-1 + 1 条 D0）。追评沿用「一行 = 一个线程」的规则：
+    不新建 review_id，只往既有线程上补 append_review_text / append_review_time。
+
+    这些事件**不带任何标记字段**，也没有独立的测试数据分支：
+    后台能否筛到它们，完全取决于 last_activity_time 的真实计算结果。
+
+时间锚点已冻结（双时钟，禁止改回 datetime.now()）：
+    本文件早期用 datetime.now() 当作数据锚点，导致同一 review_id 的绝对时间戳
+    每天整体 +1 天漂移。对 INITIAL 影响有限，但 **FOLLOWUP 的 canonical
+    content_key 内嵌 append_review_time**（如 ...::FOLLOWUP::20261007094000），
+    漂移会让下游把同一条追评判成「全新的 canonical 事件」，产生伪重复。
+
+    因此拆成两个独立的**常量**锚点，语义不同，**禁止混用**：
+
+        SIM_BASE_DATE          = Demo 时钟的「今天」，固定 2026-10-09。
+                                 决定后台「今天 / 昨天 / 近7天」快捷区间，
+                                 以及新增演示事件 D0 / D-1 的落点。
+
+        SIM_LEGACY_ANCHOR_DATE = 既有 176 条历史数据的时间锚点，固定 2026-10-08。
+                                 必须锚在这一天：已落库 PostgreSQL 的那批数据
+                                 当时的生成日期就是 2026-10-08，只有锚在这里才能
+                                 逐字复现既有 canonical identity
+                                 （例如 RV202600167 追评 = 2026-10-07 09:40）。
+
+    两者都不再读取运行当天日期；需要重新定基准时用同名环境变量覆盖
+    （SIM_BASE_DATE / SIM_LEGACY_ANCHOR_DATE，格式 YYYY-MM-DD）。
+
+新增测试数据批次（NEW_REVIEW_PLAN_20261010，2026-10-10）：
+    在既有 181 条之外再追加 4 个**全新的评价线程**（RV202600182 ~ RV202600185），
+    用于验证「真正的新数据」能完整走通
+    RPA 采集 → VOC_00 → VOC_01 → VOC_02 → VOC_03 全链路。
+
+    刻意**不复用 SIM_BASE_DATE**，而是单独用第三个常量锚点
+    SIM_NEW_BATCH_DATE（固定 2026-10-10）：
+    SIM_BASE_DATE 一旦前移，会整体平移既有演示事件（RV177~RV181）的绝对时间戳，
+    而 RV202600167 的 FOLLOWUP content_key（::FOLLOWUP::20261007094000）已落库
+    PostgreSQL —— 平移会把既有 canonical identity 判成全新事件。
+    因此本批次锚在 2026-10-10（Demo 时钟「今天」之后一天），按固定时/分生成，
+    不参与随机、不随运行日期漂移，且**不触碰既有 181 条的任何字段**。
+
+    后续又在此基础上追加了两个**独立解耦**的批次常量（互不影响的代价是
+    每个批次都能单独新增/回滚，不会牵动其它批次）：
+        NEW_REVIEW_PLAN_20261010_FINAL   → RV202600186 / RV202600187（17:50 / 18:00）
+        NEW_REVIEW_PLAN_20261010_DIFY    → RV202600188 / RV202600189（19:00 / 19:10）
+    两者同样锚在 SIM_NEW_BATCH_DATE，按固定时/分生成，只消耗既有数据之后的随机数。
+
+AI_REQUIRED 文案设计约束（重要，改动这两条文案时必须重新核对）：
+    目标：两条都必须**真正经过 Dify**（走 AI_REQUIRED 分支），而不是被
+    VOC_02 的 Rule Engine 直接定级成 RULE_ONLY。
+
+    Rule Engine（rules-supplement-v1.0）里 need_ai 只会在以下情况被置为 true：
+        · 强/弱真伪质疑（怀疑正品 / 假货 / 不知道是不是正品）
+        · 命中拼音或英文别名（exin / tou yun / guomin / seal）
+        · 文本含「不确定是不是这个原因」「不知道是不是这个原因」字面
+        · P0 且同时命中多个业务问题（MULTI_ISSUE）
+        · 评分 >= 4 且存在风险冲突信号
+        · **规则一条都没命中 → rule_decision = UNKNOWN → need_ai = true**
+
+    所以文案必须同时满足两点：
+        1) 不能命中任何确定性规则（否则 rule_risk_level 非空，need_ai 保持 false
+           → 直接 RULE_ONLY，根本不进 Dify）。
+           尤其要避开：胃不舒服 / 胃疼 / 恶心 / 想吐 / 头晕 / 拉肚子 / 腹泻 /
+           红疹 / 发霉 / 异物 / 漏液 / 效果一般 / 太甜 / 太苦 / 物流太慢 等字面。
+           「胃里有点不舒服」因中间隔着「里有点」而**不命中**胃部规则，可安全使用。
+        2) 也不能落入「明确正面 / 已闭环」词表（否则判 NONE 且 need_ai = false
+           → 同样不进 Dify）。要避开：舒服多了 / 放心了 / 没有不舒服 / 不错 /
+           满意 / 回购 / 已经寄回 / 态度还行 等。
+    两条都额外写了「不确定/不知道是不是这个原因」字面，作为 need_ai 的第二重保险。
+    但**风险等级本身交给 Dify 判定**，不为了凑 P0 去堆硬规则关键词。
+
+追评时间规则（已冻结）：
+    存在追评时，append_review_time 必须**严格晚于** review_time；
+    不存在追评时，append_review_text / append_review_time 必须同时为 NULL。
+    生成器只能用「先抽严格为正的时间差、再收缩首评时间上界」的方式保证该规则，
+    禁止用裁剪、事后排序或针对某条 review_id 打补丁的方式绕过。
+
+内部计算字段 last_activity_time（不进入 CSV）：
+    last_activity_time = append_review_time or review_time
+    仅用于后台排序与日期筛选，实现「按最后活动时间做增量巡检」：
+    老评价一旦被追评，必须重新回到列表顶部，并被「今天 / 昨天 / 近7天」命中。
+"""
+
+import os
+import random
+import string
+from datetime import datetime, timedelta
+
+SEED = 20261006
+_rng = random.Random(SEED)
+
+
+def _date_env(name, default):
+    """
+    读取「仿真锚点日期」环境变量，缺省用冻结常量。
+
+    只要不显式设置环境变量，返回值就是常量 —— 这是「历史数据不再逐日漂移」的
+    根本保证：数据落点与运行当天日期完全解耦。
+    """
+    raw = os.environ.get(name)
+    if not raw or not raw.strip():
+        return default
+    return datetime.strptime(raw.strip(), "%Y-%m-%d")
+
+
+# Demo 时钟的「今天」：后台「今天 / 昨天 / 近7天」与新增演示事件都按它计算
+SIM_BASE_DATE = _date_env("SIM_BASE_DATE", datetime(2026, 10, 9))
+
+# 既有 176 条历史数据的时间锚点：等于已落库 PG 那批数据当时的生成日期
+SIM_LEGACY_ANCHOR_DATE = _date_env("SIM_LEGACY_ANCHOR_DATE", datetime(2026, 10, 8))
+
+# ---------------------------------------------------------------- 虚构店铺
+SHOPS = [
+    {"shop_id": "SHOP_A", "name": "元气营养健康旗舰店", "platform": "天猫"},
+    {"shop_id": "SHOP_B", "name": "晨光膳食专营店", "platform": "淘宝"},
+]
+SHOP_NAMES = [s["name"] for s in SHOPS]
+
+# ---------------------------------------------------------------- 虚构商品
+ITEMS = [
+    {"shop_id": "SHOP_A", "item_id": "IT1001", "item_name": "益生菌复合粉（成人版）",
+     "skus": [("SKU100101", "30条装"), ("SKU100102", "60条装")]},
+    {"shop_id": "SHOP_A", "item_id": "IT1002", "item_name": "乳清蛋白粉 香草味",
+     "skus": [("SKU100201", "500g罐装"), ("SKU100202", "1kg罐装")]},
+    {"shop_id": "SHOP_A", "item_id": "IT1003", "item_name": "复合维生素软糖",
+     "skus": [("SKU100301", "60粒装"), ("SKU100302", "120粒装")]},
+    {"shop_id": "SHOP_A", "item_id": "IT1004", "item_name": "深海鱼油软胶囊",
+     "skus": [("SKU100401", "100粒装")]},
+    {"shop_id": "SHOP_A", "item_id": "IT1005", "item_name": "膳食纤维代餐奶昔",
+     "skus": [("SKU100501", "草莓味"), ("SKU100502", "可可味")]},
+    {"shop_id": "SHOP_B", "item_id": "IT2001", "item_name": "钙镁咀嚼片",
+     "skus": [("SKU200101", "100片装")]},
+    {"shop_id": "SHOP_B", "item_id": "IT2002", "item_name": "叶黄素酯软糖",
+     "skus": [("SKU200201", "60粒装"), ("SKU200202", "120粒装")]},
+    {"shop_id": "SHOP_B", "item_id": "IT2003", "item_name": "胶原蛋白肽饮品",
+     "skus": [("SKU200301", "20支装")]},
+    {"shop_id": "SHOP_B", "item_id": "IT2004", "item_name": "铁叶酸片",
+     "skus": [("SKU200401", "60片装")]},
+    {"shop_id": "SHOP_B", "item_id": "IT2005", "item_name": "褪黑素片",
+     "skus": [("SKU200501", "30片装")]},
+]
+
+# ---------------------------------------------------------------- 文案池
+# 结构：(类目, 星级, 文案列表)
+TEXT_POOL = [
+    ("五星好评", 5, [
+        "味道不错，孩子也爱吃，会继续回购。",
+        "包装很严实，物流也快，第二天就到了。",
+        "客服回复很及时，问的问题都解答得挺清楚，满意。",
+        "吃了两周感觉还不错，早餐加一勺挺方便。",
+        "第二次买了，家里人都在吃，性价比可以。",
+        "比线下便宜不少，东西是一样的，好评。",
+    ]),
+    ("四星好评", 4, [
+        "整体还行，就是勺子不太好找，希望配个量勺。",
+        "东西不错，物流慢了一天，其他都好。",
+        "口感可以，就是甜味稍重一点，扣一星。",
+    ]),
+    ("三星中评", 3, [
+        "效果一般般吧，可能要坚持吃才看得出来，先给三星。",
+        "味道偏甜，我不是很习惯，凑合能吃。",
+        "包装有点简陋，瓶口封条没贴紧，希望改进。",
+        "跟想象中不太一样，说不上好也说不上差。",
+    ]),
+    ("一星差评", 1, [
+        "收到的时候外箱就破了，里面瓶身也凹了一块。",
+        "跟之前买的味道不一样，颜色也深一些，不太敢吃了。",
+        "客服一直不回消息，问了三天没人理。",
+        "下单写的是现货，结果等了六天才发货。",
+    ]),
+    ("包装问题", 2, [
+        "瓶子密封不严，打开里面有粉漏出来，包装需要改进。",
+        "外包装被压变形了，还好里面没坏。",
+        "封口贴纸撕开就是开的，感觉不放心。",
+    ]),
+    ("物流问题", 2, [
+        "物流太慢了，下单五天才到，而且快递放在驿站也没通知。",
+        "快递员态度很差，直接扔在门口就走了。",
+        "同一单分了两个包裹，一个到了一个还在路上。",
+    ]),
+    ("客服问题", 2, [
+        "问了三次都没有人回复，客服形同虚设。",
+        "申请换货被驳回，客服态度很敷衍。",
+        "售后电话打不通，在线客服排队半小时。",
+    ]),
+    ("口感问题", 3, [
+        "味道太甜了，喝完有点腻，不太能接受。",
+        "这次的味道跟上次明显不一样，有点发苦。",
+        "冲调之后有很多结块，口感不太好。",
+    ]),
+    ("质量问题", 1, [
+        "打开发现有结块，看着像受潮了，不敢吃。",
+        "瓶子里有一小片黑色杂质，看着不舒服。",
+        "生产日期看不清，感觉像被擦过。",
+    ]),
+]
+
+# 疑似身体不适反馈：只描述消费者主观感受，不做医学诊断、不下结论
+DISCOMFORT_TEXTS = [
+    "吃了一段时间最近总感觉胃不舒服，先停了。",
+    "吃完有点恶心，反胃了一下午，不确定是不是这个原因。",
+    "孩子吃了以后说肚子疼，我已经先停掉了。",
+    "喝完第二天拉肚子，不确定是不是产品的问题，先不吃了。",
+    "吃了三天感觉有点头晕，不知道跟这个有没有关系，先停一停。",
+    "味道有点奇怪，吃完嘴里发苦，胃里也不太舒服，先放着不吃了。",
+    "喝完老是想吐，不知道是不是我自己的问题，先停几天看看。",
+    "吃了一周，晚上总是睡不踏实，不确定有没有关系，先停用观察。",
+]
+
+APPEND_TEXTS = [
+    "停用以后好一点了，不知道是不是这个原因。",
+    "吃了一个月，感觉没什么变化，可能不适合我。",
+    "客服后来联系我了，处理得还行，补发了一盒。",
+    "又买了一次，这次包装好多了。",
+    "前几天胃不舒服，停了几天现在好了，先观察下。",
+    "坚持吃了两个月，感觉还可以，加一星。",
+    "隔了几天我又试了一次，这次没什么不舒服，可能是那阵子肠胃本来就不好。",
+    "后来换了小规格的，吃完没什么问题，先这样吃着。",
+    "商家主动联系我了，说了用法和用量，态度还行。",
+    "停了一周又继续吃，这次没有不舒服，可能是之前空腹喝的。",
+    "补一句：包装这次确实改善了不少，泡沫箱加冰袋。",
+    "追评一下，第二次物流快了很多，两天就到了。",
+]
+
+SELLER_REPLIES = [
+    "亲，非常抱歉给您带来不好的体验，已安排专员与您联系，请注意接听～",
+    "亲，感谢您的反馈，包装问题我们已反馈仓库改进，谢谢支持！",
+    "亲，物流异常我们已帮您登记，稍后会有专人跟进～",
+    "亲，食用感受因人而异，建议先停用并咨询专业人士哦～",
+    "亲，感谢支持，后续有任何问题随时联系我们～",
+    "",
+    "",
+]
+
+# ---------------------------------------------------------------- 增量巡检样本
+# 运营的真实痛点：老评价被追评后，如果还按 review_time 排序/筛选，这条线程会沉下去，
+# 运营根本看不到。因此这里定向植入一批「首评很早 + 追评很新」的线程，
+# 用来验证 last_activity_time 的排序与增量筛选是否真的生效。
+#
+# 元组含义：(商品ID, 星级, 首评文案, 追评文案下标, 首评距今天数, 追评距今天数)
+# 约定：首评距今天数 > 追评距今天数，保证 append_review_time 严格晚于 review_time。
+# 追评距今天数刻意覆盖 0(今天) / 1(昨天) / 2~6(近7天内) / 7 / 12 / 20 / 30(近7天外)，
+# 让「近7天」的边界也能被自动化用例覆盖。
+INCREMENTAL_PLAN = [
+    ("IT1001", 3, "吃了一段时间感觉一般，先给三星，过阵子再来追评。", 0, 90, 1),
+    ("IT1005", 1, "第一次买，味道不太习惯，先放着不吃。", 1, 88, 0),
+    ("IT2003", 2, "包装一般，瓶口有点漏，先给两星。", 2, 80, 2),
+    ("IT1002", 3, "口感还行，就是冲调有点结块，再看看。", 3, 74, 3),
+    ("IT2001", 1, "物流太慢了，等了五天才到，先记一笔。", 4, 68, 5),
+    ("IT1003", 2, "孩子不太爱吃，先停一段时间看看。", 5, 60, 6),
+    ("IT2005", 3, "效果暂时看不出来，先给三星观察。", 6, 52, 7),
+    ("IT1004", 1, "客服一直没回消息，问题到现在没解决。", 7, 45, 12),
+    ("IT2002", 2, "吃了两盒没感觉，先给两星继续观察。", 8, 36, 20),
+    ("IT1005", 3, "这次包装比上次好一点，先给三星。", 9, 60, 30),
+]
+
+# ---------------------------------------------------------------- 演示事件样本
+# 用途：为「昨日完整补采 / 当天增量采集 / INITIAL 与 FOLLOWUP canonical event /
+#       PostgreSQL Analysis Writer 新链路」这四项联调提供真实可采集的数据。
+#
+# 元组含义：(商品ID, 星级, 类目, 评价文案, 距今天数, 时, 分, 商家回复)
+# 距今天数只取 1(昨天) / 0(今天) 两档，刻意让同一批数据同时覆盖两条采集链路。
+# 类目复用既有取值，不新增类目，避免污染后台类目筛选。
+DEMO_EVENT_PLAN = [
+    # ---- 昨天（D-1）：3 条新评价线程 ----
+    ("IT1001", 2, "包装问题", "收到货外包装已经压坏了，里面的瓶子也有明显凹痕。", 1, 9, 20,
+     "亲，非常抱歉，外包装与瓶身的问题我们已登记，稍后安排专员为您处理～"),
+    ("IT1001", 3, "三星中评", "吃了几天暂时没什么特别感觉，先继续看看。", 1, 14, 35,
+     "亲，食用感受因人而异，建议按周期坚持食用，有任何问题随时联系我们～"),
+    ("IT2002", 5, "五星好评", "这次发货挺快，包装也完整，整体满意。", 1, 20, 10,
+     "亲，感谢您的认可，我们会继续努力，祝您生活愉快～"),
+    # ---- 今天（D0）：2 条新评价线程（时间均早于项目时间 13:30） ----
+    ("IT1001", 2, "疑似身体不适反馈",
+     "昨晚第一次吃，今天起来有点恶心，不确定是不是这个引起的。", 0, 8, 45,
+     "亲，非常抱歉给您带来不适，建议先停用并咨询专业人士，我们会有专员跟进～"),
+    ("IT2001", 4, "四星好评", "物流慢了一天，不过东西本身没问题。", 0, 11, 20,
+     "亲，物流异常我们已帮您登记反馈，感谢您的理解与支持～"),
+]
+
+# 给**已存在**的旧线程补追评：验证「老首评 + 新追评」会因 last_activity_time
+# 重新进入昨天 / 今天的增量导出。
+#
+# 元组含义：(目标review_id, 追评文案, 距今天数, 时, 分)
+# 硬约束：目标线程必须是当前无追评的初评线程（禁止覆盖已有追评），
+#         且追评时间必须严格晚于该线程的首评时间。
+DEMO_FOLLOWUP_PLAN = [
+    # 昨天：旧首评（9 月）+ 昨天追评 —— 包装类，验证「昨天补采」能捞回旧线程
+    ("RV202600109", "后来发现瓶盖有点松，打开的时候已经有一点渗漏。", 1, 16, 40),
+    # 今天：旧首评（9 月）+ 今天追评 —— 功效类，验证「当天增量」能捞回旧线程
+    ("RV202600055", "用了几天之后还是觉得效果比较一般，可能不会回购了。", 0, 12, 5),
+]
+
+# ---------------------------------------------------------------- 新增测试数据批次
+# 用途：为「真正的新数据」端到端验证提供 4 条**全新评价线程**
+# （RPA 采集 → VOC_00_CSVLoader → VOC_01_SourceAdapter → VOC_02_AnalysisPipeline
+#   → VOC_03_FeishuRiskSync），覆盖四种语义：
+#       高风险（疑似身体不适） / 归因不确定（AI_REQUIRED） / 普通物流问题 / 正常好评。
+#
+# 时间锚点：独立常量 SIM_NEW_BATCH_DATE（固定 2026-10-10），**不用** SIM_BASE_DATE。
+#   理由见文件头「新增测试数据批次」段 —— 动 SIM_BASE_DATE 会平移既有演示事件的
+#   绝对时间戳，破坏已落库 PostgreSQL 的 canonical identity。
+#
+# 元组含义：(商品ID, 星级, 类目, 评价文案, 时, 分, 商家回复)
+# 类目复用既有取值、不新增类目，避免污染后台统计口径与筛选。
+SIM_NEW_BATCH_DATE = _date_env("SIM_NEW_BATCH_DATE", datetime(2026, 10, 10))
+
+NEW_REVIEW_PLAN_20261010 = [
+    # 1) 产品安全类：主观身体不适 + 已停用动作 —— 验证高风险 / AI 判断路径
+    ("IT1001", 2, "疑似身体不适反馈",
+     "吃完以后胸口有点闷，停了一会儿才缓过来，不知道是不是这个产品引起的。", 15, 10,
+     "亲，非常抱歉给您带来不适，建议先停用并咨询专业人士，我们会有专员跟进～"),
+    # 2) 归因不确定：不适描述 + 自述其他诱因（熬夜）—— 验证 AI_REQUIRED 语义判断
+    ("IT2003", 2, "疑似身体不适反馈",
+     "喝了两天胃有点不舒服，但最近也熬夜了，不确定是不是产品的问题。", 15, 25,
+     "亲，非常抱歉给您带来不适，建议先停用观察、注意休息，有问题随时联系我们～"),
+    # 3) 普通物流问题：低风险 —— 预期不产生 P0/P1 风险工单
+    ("IT2001", 3, "物流问题",
+     "物流比预计晚了两天，包装倒是没问题。", 15, 40,
+     "亲，物流异常我们已帮您登记反馈，感谢您的理解与支持～"),
+    # 4) 正常好评：非风险评价 —— 预期不产生任何风险工单
+    ("IT1001", 5, "五星好评",
+     "包装完整，味道也能接受，目前吃着没什么问题。", 16, 0,
+     "亲，感谢您的认可，我们会继续努力，祝您生活愉快～"),
+]
+
+# ---------------------------------------------------------------- 多条 AI_REQUIRED 并发验证批次
+# 用途：验证 VOC_02_AnalysisPipeline_v1 移除 Limit 节点后，
+#       **同一次采集里出现多条 AI_REQUIRED** 时，是否每一条都能完整走完
+#       Dify → PostgreSQL analysis_results → VOC_03 → 飞书风险处理台，
+#       而不是只有第一条被处理（这是 Limit 节点遗留的经典截断问题）。
+#
+# 文案刻意设计成**无法靠简单关键词稳定判定**的组合：
+#   · 有不适描述（胃/肚子不舒服）
+#   · 但同时带「停了一天又好一些」「今天没吃感觉好了一点」
+#   · 且明确自述归因不确定（不知道是不是 / 不确定到底是不是）
+#   → 规则引擎难以直接定级，必须进入 AI 语义分析，且大概率判为高风险。
+#
+# 独立计划常量的原因：与 NEW_REVIEW_PLAN_20261010 彻底解耦，
+#   新增/回滚本批次都不会影响 182~185 那批的生成结果。
+#   沿用同一个时间锚点 SIM_NEW_BATCH_DATE（2026-10-10），不新增锚点。
+#
+# 元组含义：(商品ID, 星级, 类目, 评价文案, 时, 分, 商家回复)
+# 两条均为 INITIAL_REVIEW、无追评（append 两列同时为空，由 _build 推导 review_type=初评）。
+NEW_REVIEW_PLAN_20261010_FINAL = [
+    ("IT1005", 2, "疑似身体不适反馈",
+     "这两天喝完总觉得胃里有点不舒服，停了一天好像又好一些，也不知道是不是这个的原因。",
+     17, 50,
+     "亲，非常抱歉给您带来不适，建议先停用观察，必要时咨询专业人士，我们会有专员跟进～"),
+    ("IT2001", 2, "疑似身体不适反馈",
+     "吃完以后肚子一直不太舒服，今天没吃感觉好了一点，但我也不确定到底是不是它导致的。",
+     18, 0,
+     "亲，非常抱歉给您带来不适，建议先停用并咨询专业人士，有问题随时联系我们～"),
+]
+
+# ---------------------------------------------------------------- 影刀 180 秒超时验证批次
+# 用途：验证「整条 n8n 链路执行时间超过 30 秒」时，影刀仍能正常等待 webhook 返回。
+#   背景：影刀 HTTP 请求默认 30 秒超时，VOC_99 曾因 Dify 执行时间较长被误报超时；
+#   现已改为 180 秒。因此本轮刻意准备 **2 条都必须真正走 Dify** 的评价，
+#   让 影刀 → VOC_00 → VOC_01 → VOC_02 → 2×AI_REQUIRED → Dify 连续分析
+#   → PostgreSQL → VOC_03 → 飞书 这条链路的耗时被真实拉长。
+#
+# 文案如何保证「一定进 Dify」：见文件头「AI_REQUIRED 文案设计约束」。
+#   简言之 —— 既避开全部确定性规则字面（不产生 rule_risk_level），
+#   又避开「明确正面 / 已闭环」词表（不判 NONE），
+#   于是 Rule Engine 输出 rule_decision = UNKNOWN、need_ai = true → AI_REQUIRED；
+#   同时两条都带「不确定/不知道是不是这个原因」字面，作为 need_ai 的第二重保险。
+#
+# 商品与店铺刻意错开：
+#   RV188 = IT1005 膳食纤维代餐奶昔（元气营养健康旗舰店 / 天猫）
+#   RV189 = IT2004 铁叶酸片（晨光膳食专营店 / 淘宝）
+#
+# 元组含义：(商品ID, 星级, 类目, 评价文案, 时, 分, 商家回复)
+# 两条均为 INITIAL_REVIEW、无追评（append 两列同时为空，由 _build 推导 review_type=初评）。
+NEW_REVIEW_PLAN_20261010_DIFY = [
+    ("IT1005", 2, "疑似身体不适反馈",
+     "连续喝了两天之后总觉得胃里有点不舒服，停了一天好像缓了一些，但真不确定是不是这个原因。",
+     19, 0,
+     "亲，非常抱歉给您带来不适，建议先停用观察，必要时咨询专业人士，我们会有专员跟进～"),
+    ("IT2004", 2, "疑似身体不适反馈",
+     "吃完以后整个人不太舒服，停了两天才慢慢缓过来，但确实不知道是不是这个原因，也不敢随便下结论。",
+     19, 10,
+     "亲，非常抱歉给您带来不适，建议先停用并观察，必要时咨询专业人士，有问题随时联系我们～"),
+]
+
+CSV_FIELDS = [
+    "platform", "shop_name", "item_id", "item_name", "sku_id", "sku_name",
+    "order_id", "buyer_id", "review_id", "rating", "rating_label",
+    "review_text", "review_time", "append_review_text", "append_review_time",
+]
+
+# ---------------------------------------------------------------- 时间窗口
+# 下面这组窗口**只服务于既有 176 条历史数据**，锚在 SIM_LEGACY_ANCHOR_DATE。
+#
+# 注意：这里刻意**不再**使用 datetime.now()。历史数据一旦随运行日期漂移，
+# 已落库的 canonical identity（尤其内嵌时间戳的 FOLLOWUP content_key）就会被
+# 判成新事件。历史数据的定位是「已经发生、已经入库的事实」，必须是常量。
+_WINDOW_DAYS = 100
+_LEGACY_TODAY = SIM_LEGACY_ANCHOR_DATE
+_TIME_START = _LEGACY_TODAY - timedelta(days=_WINDOW_DAYS - 1)
+_TIME_END = _LEGACY_TODAY + timedelta(hours=23, minutes=59, seconds=59)
+_TOTAL_MINUTES = int((_TIME_END - _TIME_START).total_seconds() // 60)
+
+# 追评相对首评的时间差范围。业务冻结：时间差必须严格为正。
+_APPEND_GAP_MIN_MINUTES = 6 * 60        # 6 小时
+_APPEND_GAP_MAX_MINUTES = 30 * 24 * 60  # 30 天
+
+
+def _rand_time(rng, start_offset_min=0, end_offset_min=_TOTAL_MINUTES):
+    """在 [start_offset_min, end_offset_min] 分钟窗口内随机一个时间点。"""
+    delta = rng.randint(start_offset_min, end_offset_min)
+    return _TIME_START + timedelta(minutes=delta)
+
+
+def _rand_append_pair(rng):
+    """
+    生成「首评时间 + 追评时间」这一对时间戳。
+
+    业务规则（已冻结）：存在追评时 append_review_time 必须**严格晚于**
+    review_time，不允许相等，更不允许早于。
+
+    实现方式：先抽一个严格为正的时间差 gap，再把首评时间的抽取上界收缩到
+    （整体窗口上界 - gap），这样追评既严格晚于首评、又不会越过仿真数据的时间窗口上界。
+
+    刻意不使用 min(rtime + gap, 上界) 这类裁剪写法：当首评时间落在窗口末尾时，
+    裁剪会把追评时间压到等于首评时间，违反上面的严格晚于规则。
+    """
+    gap = rng.randint(_APPEND_GAP_MIN_MINUTES, _APPEND_GAP_MAX_MINUTES)
+    rtime = _rand_time(rng, end_offset_min=_TOTAL_MINUTES - gap)
+    return rtime, rtime + timedelta(minutes=gap)
+
+
+def _fmt(dt):
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _rating_label(rating):
+    if rating is None or rating == "":
+        return ""
+    rating = int(rating)
+    if rating <= 2:
+        return "差评"
+    if rating == 3:
+        return "中评"
+    return "好评"
+
+
+def _order_id(rng):
+    return "DEMO" + "".join(rng.choice(string.digits) for _ in range(15))
+
+
+def _buyer_id(rng):
+    tail = "".join(rng.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+    return "tb_{}***".format(tail)
+
+
+def _last_activity(rtime, append_time):
+    """
+    线程「最后活动时间」：有追评取追评时间，否则取首评时间。
+
+    这是后台的**内部计算字段**，只用于排序与日期筛选：
+        - 列表默认按它倒序，老评价一旦被追评就要重新回到顶部；
+        - 「今天 / 昨天 / 近7天」以及自定义起止日期都按它过滤。
+    它不进入 CSV（CSV 仍是冻结的 15 字段），也不改变 Source Schema。
+    """
+    return append_time or _fmt(rtime)
+
+
+def _build(rows, idx, item, shop, category, rating, text, rtime,
+           append_text="", append_time="", reply="",
+           buyer_id=None, order_id=None):
+    # review_type 由追评有无推导，不再支持传入：
+    # 严禁把追评再拆成独立行，否则同一条追评内容会在导出文件中出现两次。
+    review_type = "追评" if append_text else "初评"
+    sku_id, sku_name = _rng.choice(item["skus"])
+    rows.append({
+        "review_id": "RV2026{:05d}".format(idx),
+        "platform": shop["platform"],
+        "shop_name": shop["name"],
+        "item_id": item["item_id"],
+        "item_name": item["item_name"],
+        "sku_id": sku_id,
+        "sku_name": sku_name,
+        "order_id": order_id or _order_id(_rng),
+        "buyer_id": buyer_id or _buyer_id(_rng),
+        "rating": rating,
+        "rating_label": _rating_label(rating),
+        "category": category,
+        "review_type": review_type,
+        "review_text": text,
+        "review_time": _fmt(rtime),
+        "append_review_text": append_text,
+        "append_review_time": append_time,
+        "last_activity_time": _last_activity(rtime, append_time),
+        "has_append": "是" if append_text else "否",
+        "seller_reply": reply,
+    })
+
+
+def _apply_demo_followup(rows, review_id, append_text, days_ago, hour, minute):
+    """
+    给一个**已存在**的评价线程补追评。
+
+    遵循「一行 = 一个线程」的冻结规则：不新建 review_id、不动首评时间与身份字段，
+    只补 append 两列，并重算由它派生的内部字段（review_type / has_append /
+    last_activity_time）。
+
+    前置守卫全部硬失败（raise），不允许静默产出脏数据：
+        1. 目标 review_id 必须存在
+        2. 目标线程当前必须是无追评的初评线程（禁止覆盖已有追评）
+        3. 追评时间必须严格晚于首评时间
+    """
+    row = next((r for r in rows if r["review_id"] == review_id), None)
+    if row is None:
+        raise ValueError(
+            "DEMO_FOLLOWUP_PLAN 配置错误：目标 review_id 不存在 ({})".format(review_id))
+    if row["append_review_text"] or row["append_review_time"]:
+        raise ValueError(
+            "DEMO_FOLLOWUP_PLAN 配置错误：目标线程已有追评，禁止覆盖 ({})".format(review_id))
+
+    # 演示事件按 Demo 时钟（SIM_BASE_DATE）定位，不跟随历史锚点
+    append_dt = SIM_BASE_DATE - timedelta(days=days_ago) + timedelta(hours=hour, minutes=minute)
+    append_time = _fmt(append_dt)
+    if append_time <= row["review_time"]:
+        raise ValueError(
+            "DEMO_FOLLOWUP_PLAN 配置错误：追评时间必须严格晚于首评 "
+            "({} 首评={} 追评={})".format(review_id, row["review_time"], append_time))
+
+    row["append_review_text"] = append_text
+    row["append_review_time"] = append_time
+    row["review_type"] = "追评"          # 派生字段：由追评有无推导，不再独立维护
+    row["has_append"] = "是"
+    row["last_activity_time"] = _last_activity(None, append_time)
+
+
+def _generate():
+    rows = []
+    rng = _rng
+    idx = 1
+
+    # ---------- 常规评价 ----------
+    # 加权：好评占多数，差评与各类问题占少数，贴近真实分布
+    weights = [34, 16, 12, 6, 5, 5, 4, 5, 4]
+    pool = TEXT_POOL
+    for _ in range(156):
+        cat, rating, texts = rng.choices(pool, weights=weights, k=1)[0]
+        item = rng.choice(ITEMS)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        text = rng.choice(texts)
+        reply = rng.choice(SELLER_REPLIES)
+
+        # 追评：先抽严格为正的时间差，再据此收缩首评时间的抽取上界
+        has_append = rng.random() < 0.22
+        append_text = ""
+        append_time = ""
+        if has_append:
+            append_text = rng.choice(APPEND_TEXTS)
+            rtime, append_dt = _rand_append_pair(rng)
+            append_time = _fmt(append_dt)
+        else:
+            rtime = _rand_time(rng)
+
+        _build(rows, idx, item, shop, cat, rating, text, rtime,
+               append_text, append_time, reply)
+        idx += 1
+
+    # ---------- 定向植入：可进入 VOC P0/P1 风险判断的样本 ----------
+    # 说明：仅描述主观感受，不使用任何医学诊断结论
+    risk_plan = [
+        ("IT1001", 1, DISCOMFORT_TEXTS[0], 0, True),
+        ("IT1001", 2, DISCOMFORT_TEXTS[1], 1, True),
+        ("IT1005", 1, DISCOMFORT_TEXTS[2], 2, True),
+        ("IT2003", 2, DISCOMFORT_TEXTS[3], 3, False),
+        ("IT2001", 1, DISCOMFORT_TEXTS[4], 4, True),
+        ("IT1003", 2, DISCOMFORT_TEXTS[5], 5, False),
+        ("IT1002", 1, DISCOMFORT_TEXTS[6], 0, True),
+        ("IT2005", 2, DISCOMFORT_TEXTS[7], 6, False),
+        ("IT1001", 1, "吃了一段时间最近总感觉胃不舒服，先停了。", 1, True),
+        ("IT1004", 2, "吃完有点恶心，不确定是不是这个原因，先停掉。", 7, False),
+    ]
+    for item_id, rating, text, disf_idx, with_append in risk_plan:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        # 追评用同一套时间差逻辑，保证 append_review_time 严格晚于 review_time
+        append_text = ""
+        append_time = ""
+        if with_append:
+            append_text = APPEND_TEXTS[disf_idx]
+            rtime, append_dt = _rand_append_pair(rng)
+            append_time = _fmt(append_dt)
+        else:
+            rtime = _rand_time(rng)
+        reply = ("亲，非常抱歉给您带来不好的体验，已安排专员与您联系，"
+                 "建议先停用并咨询专业人士～")
+        _build(rows, idx, item, shop, "疑似身体不适反馈", rating, text, rtime,
+               append_text, append_time, reply)
+        idx += 1
+
+    # ---------- 定向植入：增量巡检样本 ----------
+    # 首评很早（几十天前）+ 追评很新（近 30 天内），用于验证增量巡检。
+    # 时间直接按「距今天数」计算，不参与随机，保证用例可稳定复现。
+    for item_id, rating, text, app_idx, d_rev, d_app in INCREMENTAL_PLAN:
+        # 硬性守卫：首评必须早于追评，写错配置直接炸掉，不允许静默产出脏数据
+        if d_rev <= d_app:
+            raise ValueError(
+                "INCREMENTAL_PLAN 配置错误：追评不能早于或等于首评 "
+                "(item_id={}, 首评距今天数={}, 追评距今天数={})".format(item_id, d_rev, d_app))
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        # 增量巡检样本属于既有 176 条，锚在历史日期，不得随运行日期漂移
+        rtime = _LEGACY_TODAY - timedelta(days=d_rev) + timedelta(hours=10, minutes=15)
+        append_dt = _LEGACY_TODAY - timedelta(days=d_app) + timedelta(hours=9, minutes=40)
+        _build(rows, idx, item, shop, "增量巡检样本", rating, text, rtime,
+               APPEND_TEXTS[app_idx], _fmt(append_dt),
+               "亲，感谢您的再次反馈，我们会持续关注，有问题随时联系我们～")
+        idx += 1
+
+    # ---------- 演示事件：5 个新评价线程 ----------
+    # 追加在既有 176 条**之后**生成，因此不会消耗到既有数据用到的随机数，
+    # 既有 176 条的 review_id / order_id / buyer_id / 全部时间戳保持原样。
+    for item_id, rating, cat, text, d_rev, hh, mm, reply in DEMO_EVENT_PLAN:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        rtime = SIM_BASE_DATE - timedelta(days=d_rev) + timedelta(hours=hh, minutes=mm)
+        _build(rows, idx, item, shop, cat, rating, text, rtime, reply=reply)
+        idx += 1
+
+    # ---------- 新增测试数据：2026-10-10 批次 4 个新线程 ----------
+    # 追加在既有 181 条**之后**生成，因此不会消耗到既有数据用到的随机数，
+    # 既有 181 条的 review_id / order_id / buyer_id / 全部时间戳保持原样。
+    # review_id 顺延为 RV202600182 ~ RV202600185。
+    for item_id, rating, cat, text, hh, mm, reply in NEW_REVIEW_PLAN_20261010:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        rtime = SIM_NEW_BATCH_DATE + timedelta(hours=hh, minutes=mm)
+        _build(rows, idx, item, shop, cat, rating, text, rtime, reply=reply)
+        idx += 1
+
+    # ---------- 多条 AI_REQUIRED 并发验证批次 ----------
+    # 追加在既有 185 条**之后**生成，同样只消耗既有数据之后的随机数。
+    # review_id 顺延为 RV202600186 ~ RV202600187。
+    for item_id, rating, cat, text, hh, mm, reply in NEW_REVIEW_PLAN_20261010_FINAL:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        rtime = SIM_NEW_BATCH_DATE + timedelta(hours=hh, minutes=mm)
+        _build(rows, idx, item, shop, cat, rating, text, rtime, reply=reply)
+        idx += 1
+
+    # ---------- 影刀 180 秒超时验证批次：2 个新线程 ----------
+    # 同样追加在既有 187 条**之后**生成，只消耗既有数据之后的随机数。
+    # review_id 顺延为 RV202600188 ~ RV202600189。
+    for item_id, rating, cat, text, hh, mm, reply in NEW_REVIEW_PLAN_20261010_DIFY:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        rtime = SIM_NEW_BATCH_DATE + timedelta(hours=hh, minutes=mm)
+        _build(rows, idx, item, shop, cat, rating, text, rtime, reply=reply)
+        idx += 1
+
+    # ---------- 演示事件：2 个旧线程新增追评 ----------
+    # 不新建线程，只给既有线程补 append 两列；review_id 与首评时间均保持不变。
+    for review_id, append_text, d_app, hh, mm in DEMO_FOLLOWUP_PLAN:
+        _apply_demo_followup(rows, review_id, append_text, d_app, hh, mm)
+
+    # ---------- 2026-10-13 演示批次（14:00 定时采集演示） ----------
+    # 追加在既有 189 条之后生成，不消耗既有数据随机数，
+    # review_id 顺延为 RV202600190 / RV202600191。
+    # 独立锚点常量，与 SIM_BASE_DATE / SIM_NEW_BATCH_DATE 解耦：
+    #   不动任何冻结锚点，因此不平移既有演示事件的绝对时间戳、
+    #   不破坏已落库 PostgreSQL 的 canonical identity，也不影响「今天/昨天」语义。
+    # 时间锚死 2026-10-13，不随运行当天日期漂移，保证演示日期可复现。
+    SIM_DEMO_DATE_1013 = datetime(2026, 10, 13)
+    DEMO_REVIEW_PLAN_20261013 = [
+        # 第一条：明确消费者使用不适反馈（命中规则引擎确定性字面「恶心」「头晕」
+        #         → 产品安全类高风险，P0/P1 候选；风险等级由规则/AI 实际判定，不伪造）
+        ("IT1001", 1, "疑似身体不适反馈",
+         "吃完这个益生菌之后胃里一阵阵犯恶心，还伴随头晕，已经停了不敢再吃。",
+         13, 20,
+         "亲，非常抱歉给您带来不适，建议先停用并咨询专业人士，我们会有专员跟进～"),
+        # 第二条：语义模糊，不适但无法确认原因（避开全部确定性规则字面
+        #         → 规则初筛 UNKNOWN → need_ai=true → 进 Dify 辅助分析；
+        #         带「不确定是不是这个原因」保险字面）
+        ("IT2003", 2, "疑似身体不适反馈",
+         "喝了两天感觉身体不太舒服，但最近也在熬夜，不确定是不是这个产品引起的。",
+         13, 25,
+         "亲，非常抱歉给您带来不适，建议先停用观察、注意休息，有问题随时联系我们～"),
+    ]
+    for item_id, rating, cat, text, hh, mm, reply in DEMO_REVIEW_PLAN_20261013:
+        item = next(i for i in ITEMS if i["item_id"] == item_id)
+        shop = next(s for s in SHOPS if s["shop_id"] == item["shop_id"])
+        rtime = SIM_DEMO_DATE_1013 + timedelta(hours=hh, minutes=mm)
+        _build(rows, idx, item, shop, cat, rating, text, rtime, reply=reply)
+        idx += 1
+
+    # 默认排序：按「最后活动时间」倒序 —— 老评价被追评后要重新回到列表顶部
+    rows.sort(key=lambda r: r["last_activity_time"], reverse=True)
+    return rows
+
+
+REVIEWS = _generate()
+
+if __name__ == "__main__":
+    from collections import Counter
+
+    print("总条数：", len(REVIEWS))
+    print("类型分布：", Counter(r["review_type"] for r in REVIEWS))
+    print("星级分布：", Counter(r["rating"] for r in REVIEWS))
+    print("类目分布：", Counter(r["category"] for r in REVIEWS))
+    print("店铺分布：", Counter(r["shop_name"] for r in REVIEWS))
+    print("存在追评：", Counter(r["has_append"] for r in REVIEWS))
+
+    # ---------------------------------------------------------- Source Schema 自检
+    print("\n--- Source Schema 自检 ---")
+    ids = [r["review_id"] for r in REVIEWS]
+    print("1. review_id 唯一：", len(set(ids)) == len(ids),
+          "({} 条 / {} 唯一)".format(len(ids), len(set(ids))))
+
+    # 2. order_id 不得因「同一追评被重复建行」而重复 -> 同一 order_id 下不得有多行
+    oc = Counter(r["order_id"] for r in REVIEWS)
+    dup_orders = {k: v for k, v in oc.items() if v > 1}
+    print("2. order_id 重复组：", len(dup_orders), "（应为 0）")
+
+    # 3. append 两列必须同时为空或同时非空
+    paired = all((r["append_review_text"] == "") == (r["append_review_time"] == "")
+                 for r in REVIEWS)
+    print("3. append 两列同空同非空：", paired)
+
+    # 4. 任一 append_review_text 不得出现在另一条记录的 review_text 中
+    review_texts = {r["review_text"] for r in REVIEWS}
+    leaked = [r["append_review_text"] for r in REVIEWS
+              if r["append_review_text"] and r["append_review_text"] in review_texts]
+    print("4. 追评文本被复制成独立行：", len(leaked), "（应为 0）")
+    if leaked:
+        print("   样例：", leaked[:3])
+
+    # 5. 追评时间必须晚于主评价时间
+    bad_time = [r["review_id"] for r in REVIEWS
+                if r["append_review_time"] and r["append_review_time"] <= r["review_time"]]
+    print("5. 追评时间晚于主评价：", len(bad_time) == 0, "（异常数 %d）" % len(bad_time))
+
+    # 6. last_activity_time 必须与「有追评取追评、无追评取首评」完全一致
+    bad_last = [r["review_id"] for r in REVIEWS
+                if r["last_activity_time"]
+                != (r["append_review_time"] or r["review_time"])]
+    print("6. last_activity_time 取值一致：", len(bad_last) == 0,
+          "（异常数 %d）" % len(bad_last))
+    if bad_last:
+        print("   样例：", bad_last[:3])
+
+    # 7. 演示事件 7 条必须全部就位（5 个新线程 + 2 个旧线程追评）
+    by_id = {r["review_id"]: r for r in REVIEWS}
+    new_ids = ["RV2026{:05d}".format(n) for n in range(177, 182)]
+    missing_new = [i for i in new_ids if i not in by_id]
+    missing_app = [p[0] for p in DEMO_FOLLOWUP_PLAN if not by_id[p[0]]["append_review_text"]]
+    print("7. 演示事件就位：", not missing_new and not missing_app,
+          "（缺新线程 %d / 缺追评 %d）" % (len(missing_new), len(missing_app)))
+    if missing_new:
+        print("   缺失新线程：", missing_new)
+    if missing_app:
+        print("   未补上追评：", missing_app)
+
+    # 8. 昨天 / 今天的增量命中：必须**按 last_activity_time 真实计算**，
+    #    绝不按 review_id 白名单硬编码结果 —— 否则就失去了验证意义。
+    d1 = (SIM_BASE_DATE - timedelta(days=1)).strftime("%Y-%m-%d")
+    d0 = SIM_BASE_DATE.strftime("%Y-%m-%d")
+    hit_d1 = sorted(r["review_id"] for r in REVIEWS
+                    if r["last_activity_time"].startswith(d1))
+    hit_d0 = sorted(r["review_id"] for r in REVIEWS
+                    if r["last_activity_time"].startswith(d0))
+    print("8. 昨天(%s) 命中 %d 条：%s" % (d1, len(hit_d1), hit_d1))
+    print("   今天(%s) 命中 %d 条：%s" % (d0, len(hit_d0), hit_d0))
+    print("   预期下限：昨天 >= 4（3 新线程 + 1 旧线程追评）、今天 >= 3（2 新线程 + 1 旧线程追评）")
+    demo_d1_ok = len(hit_d1) >= 4 and len(hit_d0) >= 3
+    print("   下限校验：", "PASS" if demo_d1_ok else "FAIL")
+
+    # 9. 时间锚点冻结回归：历史数据与演示事件的绝对时间戳必须是常量，
+    #    不得随运行当天日期漂移。下面这批值 = 已落库 PostgreSQL 的事实，
+    #    任何一条对不上，都意味着 canonical identity 会被判成新事件。
+    frozen = [
+        # (review_id, 取值字段, 期望值, 说明)
+        ("RV202600167", "append_review_time", "2026-10-07 09:40:00", "PG 已落库 FOLLOWUP key 20261007094000"),
+        ("RV202600118", "review_time",        "2026-10-07 18:49:00", "PG 已落库 INITIAL"),
+        ("RV202600082", "review_time",        "2026-10-07 08:09:00", "PG 已落库 INITIAL"),
+        ("RV202600056", "review_time",        "2026-10-07 06:58:00", "PG 已落库 INITIAL"),
+        ("RV202600109", "append_review_time", "2026-10-08 16:40:00", "演示事件：旧线程 10/8 追评"),
+        ("RV202600055", "append_review_time", "2026-10-09 12:05:00", "演示事件：旧线程 10/9 追评"),
+        ("RV202600177", "review_time",        "2026-10-08 09:20:00", "演示事件：10/8 新线程"),
+        ("RV202600178", "review_time",        "2026-10-08 14:35:00", "演示事件：10/8 新线程"),
+        ("RV202600179", "review_time",        "2026-10-08 20:10:00", "演示事件：10/8 新线程"),
+        ("RV202600180", "review_time",        "2026-10-09 08:45:00", "演示事件：10/9 新线程"),
+        ("RV202600181", "review_time",        "2026-10-09 11:20:00", "演示事件：10/9 新线程"),
+    ]
+    bad_frozen = [(rid, fld, exp, by_id[rid].get(fld))
+                  for rid, fld, exp, _ in frozen
+                  if rid not in by_id or by_id[rid].get(fld) != exp]
+    print("9. 时间锚点冻结（%d 个绝对时间戳）：" % len(frozen),
+          not bad_frozen, "（异常 %d）" % len(bad_frozen))
+    for b in bad_frozen:
+        print("   ✗ %s.%s 期望 %s 实际 %s" % b)
+
+    # 10. 演示事件必须能被「昨天 / 今天」真实筛到（仍按 last_activity_time 计算）
+    demo_d1 = {"RV202600177", "RV202600178", "RV202600179", "RV202600109"}
+    demo_d0 = {"RV202600180", "RV202600181", "RV202600055"}
+    miss_d1 = demo_d1 - set(hit_d1)
+    miss_d0 = demo_d0 - set(hit_d0)
+    print("10. 演示事件可被昨天/今天命中：", not miss_d1 and not miss_d0,
+          "（昨天缺 %s / 今天缺 %s）" % (sorted(miss_d1) or "无", sorted(miss_d0) or "无"))
+
+    # 11. 2026-10-10 新增批次：4 条新线程必须就位，
+    #     且必须能被「自定义日期区间 2026-10-10 ~ 2026-10-10」按 last_activity_time 真实筛到
+    new_batch_ids = ["RV2026{:05d}".format(n) for n in range(182, 186)]
+    missing_batch = [i for i in new_batch_ids if i not in by_id]
+    d_new = SIM_NEW_BATCH_DATE.strftime("%Y-%m-%d")
+    # 只校验本批次 4 条是否落在 2026-10-10（不要求当天只有这 4 条 —— 后面还有 FINAL 批次）
+    hit_new = sorted(r["review_id"] for r in REVIEWS
+                     if r["review_id"] in new_batch_ids
+                     and r["last_activity_time"].startswith(d_new))
+    batch_ok = (not missing_batch) and hit_new == sorted(new_batch_ids)
+    print("11. 新增批次(%s) 就位 %d/4：缺 %s" % (d_new, 4 - len(missing_batch),
+                                                sorted(missing_batch) or "无"))
+    print("    日期区间 %s~%s 命中 %d 条：%s" % (d_new, d_new, len(hit_new), hit_new))
+    print("    批次校验：", "PASS" if batch_ok else "FAIL")
+    for rid in new_batch_ids:
+        r = by_id.get(rid)
+        if r:
+            print("    · %s | %s | %s | %s星 | %s | %s"
+                  % (rid, r["shop_name"], r["item_name"], r["rating"],
+                     r["review_time"], r["review_text"][:28]))
+
+    # 12. 多条 AI_REQUIRED 并发批次：RV186 / RV187 必须各存在且各只有 1 条，
+    #     两条都是 INITIAL_REVIEW（无追评），且日期 = 2026-10-10
+    final_batch_ids = ["RV202600186", "RV202600187"]
+    dup_final = {rid: sum(1 for r in REVIEWS if r["review_id"] == rid)
+                 for rid in final_batch_ids}
+    final_ok = True
+    for rid in final_batch_ids:
+        r = by_id.get(rid)
+        checks = {
+            "存在": r is not None,
+            "唯一(1条)": dup_final.get(rid) == 1,
+            "日期=2026-10-10": bool(r) and r["review_time"][:10] == d_new,
+            "INITIAL_REVIEW(无追评)": bool(r) and r["review_type"] == "初评"
+                                      and r["append_review_text"] == ""
+                                      and r["append_review_time"] == "",
+            "last_activity=首评": bool(r) and r["last_activity_time"] == r["review_time"],
+        }
+        bad = [k for k, v in checks.items() if not v]
+        final_ok = final_ok and not bad
+        print("12. %s 校验：%s %s" % (rid, "PASS" if not bad else "FAIL",
+                                        "" if not bad else "未通过 -> %s" % bad))
+        if r:
+            print("     · 店铺=%s | 平台=%s | 商品=%s | SKU=%s | %s星"
+                  % (r["shop_name"], r["platform"], r["item_name"],
+                     r["sku_name"], r["rating"]))
+            print("     · 文案=%s" % r["review_text"])
+            print("     · 首评=%s | 追评=%s | 最后活动=%s | 类目=%s"
+                  % (r["review_time"], r["append_review_time"] or "(空)",
+                     r["last_activity_time"], r["category"]))
+
+    # 13. 影刀 180 秒超时验证批次：RV188 / RV189 必须各存在且各只有 1 条，
+    #     两条都是 INITIAL_REVIEW（无追评），日期 = 2026-10-10，
+    #     且 review_time 必须晚于 RV187（18:00:00）。
+    #     另外做一次 **AI_REQUIRED 静态预检**：确认文案没有命中 Rule Engine 的
+    #     确定性规则字面、也没有落入「明确正面/已闭环」词表（详见文件头约束说明）。
+    dify_batch_ids = ["RV202600188", "RV202600189"]
+    dup_dify = {rid: sum(1 for r in REVIEWS if r["review_id"] == rid)
+                for rid in dify_batch_ids}
+    rv187_time = by_id.get("RV202600187", {}).get("review_time", "")
+    dify_ok = True
+    for rid in dify_batch_ids:
+        r = by_id.get(rid)
+        checks = {
+            "存在": r is not None,
+            "唯一(1条)": dup_dify.get(rid) == 1,
+            "日期=2026-10-10": bool(r) and r["review_time"][:10] == d_new,
+            "晚于RV187": bool(r) and bool(rv187_time) and r["review_time"] > rv187_time,
+            "INITIAL_REVIEW(无追评)": bool(r) and r["review_type"] == "初评"
+                                      and r["append_review_text"] == ""
+                                      and r["append_review_time"] == "",
+            "last_activity=首评": bool(r)
+                                  and r["last_activity_time"] == r["review_time"],
+            "2星差评": bool(r) and r["rating"] == 2 and r["rating_label"] == "差评",
+        }
+        bad = [k for k, v in checks.items() if not v]
+        dify_ok = dify_ok and not bad
+        print("13. %s 校验：%s %s" % (rid, "PASS" if not bad else "FAIL",
+                                     "" if not bad else "未通过 -> %s" % bad))
+        if r:
+            print("     · 店铺=%s | 平台=%s | 商品=%s(%s) | SKU=%s | %s星 | %s"
+                  % (r["shop_name"], r["platform"], r["item_name"], r["item_id"],
+                     r["sku_name"], r["rating"], r["rating_label"]))
+            print("     · 文案=%s" % r["review_text"])
+            print("     · 首评=%s | 追评=%s | 最后活动=%s | 类目=%s"
+                  % (r["review_time"], r["append_review_time"] or "(空)",
+                     r["last_activity_time"], r["category"]))
+
+    # 13b. AI_REQUIRED 静态预检（只做字面扫描，不改任何规则）
+    #      A 组 = 会命中确定性规则、导致 RULE_ONLY 的字面（必须全部未命中）
+    #      B 组 = 会判成 NONE 并关闭 need_ai 的「明确正面/已闭环」字面（必须全部未命中）
+    HARD_RULE_LITERALS = [
+        "胃不舒服", "胃疼", "胃痛", "恶心", "想吐", "头晕", "拉肚子", "腹泻",
+        "红疹", "起疹", "发霉", "虫子", "虫卵", "异物", "黑色的东西",
+        "防伪码", "假货", "怀疑不是正品", "没有密封膜", "无密封膜",
+        "像被拆开过", "开过了", "胶带是重新贴的", "临期", "漏液", "渗出来",
+        "瓶身全是油", "难吃", "难喝", "太甜", "太酸", "有点酸", "有点苦",
+        "太苦", "没啥感觉", "效果一般", "一点感觉都没有", "物流太慢",
+        "物流还慢", "下单一周才到", "等了五天", "味道和上次买的明显不一样",
+        "甜得发苦", "小包装", "独立小袋装", "巧克力味", "增加口味",
+    ]
+    CLEAR_POSITIVE_LITERALS = [
+        "回购", "满意", "不错", "挺好", "好喝", "日期很新", "第二次购买",
+        "第二次买", "老客户", "好吞咽", "会一直喝", "家里人一直在吃",
+        "舒服多了", "放心了", "会继续吃", "密封膜是完整的", "物流超快",
+        "包装严实", "挺贴心", "处理还算及时", "已经寄回", "就当没事了",
+        "态度还行", "没有出现漏液", "没有出现恶心", "没有不舒服",
+    ]
+    NEED_AI_LITERALS = ["不确定是不是这个原因", "不知道是不是这个原因"]
+    ai_precheck_ok = True
+    for rid in dify_batch_ids:
+        r = by_id.get(rid)
+        if not r:
+            ai_precheck_ok = False
+            continue
+        t = r["review_text"]
+        hit_hard = [w for w in HARD_RULE_LITERALS if w in t]
+        hit_pos = [w for w in CLEAR_POSITIVE_LITERALS if w in t]
+        hit_need = [w for w in NEED_AI_LITERALS if w in t]
+        passed = (not hit_hard) and (not hit_pos) and bool(hit_need)
+        ai_precheck_ok = ai_precheck_ok and passed
+        print("13b. %s AI_REQUIRED 预检：%s" % (rid, "PASS" if passed else "FAIL"))
+        print("     · 命中确定性规则字面：%s" % (hit_hard or "无（→ rule_decision=UNKNOWN）"))
+        print("     · 命中正面/闭环字面：%s" % (hit_pos or "无（→ 不会判 NONE）"))
+        print("     · need_ai 保险字面：%s" % (hit_need or "无"))
+    print("    预期：rule_risk_level=null、rule_decision=UNKNOWN、need_ai=true "
+          "→ 路由到 AI_REQUIRED → 调用 Dify")
+
+    ok = (len(set(ids)) == len(ids)) and not dup_orders and paired and not leaked \
+        and not bad_time and not bad_last and not missing_new and not missing_app \
+        and demo_d1_ok and not bad_frozen and not miss_d1 and not miss_d0 \
+        and batch_ok and final_ok and dify_ok and ai_precheck_ok
+    print("\n自检结论：", "PASS" if ok else "FAIL")

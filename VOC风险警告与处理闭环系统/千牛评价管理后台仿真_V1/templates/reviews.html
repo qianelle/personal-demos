@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}评价管理 · 商家工作台 Demo{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title" id="page-title" data-testid="page-title">评价管理</h1>
+  <div class="page-sub">
+    共 {{ total_all }} 条仿真评价数据，当前筛选结果 <strong id="result-total" data-testid="result-total">{{ total }}</strong> 条
+    （含追评 <strong id="result-append-total" data-testid="result-append-total">{{ append_total }}</strong> 条）
+    · 排序与日期筛选均按「最后活动时间 = 有追评取追评时间，否则取首评时间」
+  </div>
+</div>
+
+<div class="card">
+  <form class="filter-form" id="review-filter-form" data-testid="review-filter-form"
+        method="get" action="{{ url_for('reviews_page') }}">
+    <div class="filter-grid">
+      <div class="field inline field-quick">
+        <label>快捷日期（按最后活动时间）</label>
+        <div class="quick-range" id="review-quick-range" data-testid="review-quick-range">
+          <a class="quick-btn {% if quick_active == '' %}is-active{% endif %}"
+             id="quick-all" data-testid="quick-all"
+             href="{{ url_for('reviews_page', size=size) }}">全部</a>
+          {% for k, t in quick_ranges %}
+          <a class="quick-btn {% if quick_active == k %}is-active{% endif %}"
+             id="quick-{{ k }}" data-testid="quick-{{ k }}"
+             title="按最后活动时间筛选：{{ t }}"
+             href="{{ url_for('reviews_page', range=k, size=size) }}">{{ t }}</a>
+          {% endfor %}
+        </div>
+        <span class="hint">老评价一旦被追评，会按追评时间重新进入这些区间</span>
+      </div>
+      <div class="field inline">
+        <label for="review-date-start">最后活动时间（起）</label>
+        <input type="date" id="review-date-start" name="date_start" data-testid="review-date-start"
+               value="{{ filters.date_start }}">
+      </div>
+      <div class="field inline">
+        <label for="review-date-end">最后活动时间（止）</label>
+        <input type="date" id="review-date-end" name="date_end" data-testid="review-date-end"
+               value="{{ filters.date_end }}">
+      </div>
+      <div class="field inline">
+        <label for="review-shop">店铺</label>
+        <select id="review-shop" name="shop" data-testid="review-shop">
+          <option value="">全部</option>
+          {% for s in shops %}
+          <option value="{{ s }}" {% if filters.shop == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field inline">
+        <label for="review-product-search">商品ID / 商品名称</label>
+        <input type="text" id="review-product-search" name="q" data-testid="review-product-search"
+               placeholder="如 IT1001 或 益生菌" value="{{ filters.q }}">
+      </div>
+      <div class="field inline">
+        <label for="review-type">评价类型</label>
+        <select id="review-type" name="type" data-testid="review-type">
+          {% for v, t in type_options %}
+          <option value="{{ v }}" {% if filters.type == v %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+        <span class="hint" id="review-type-hint">一行=一个评价线程，追评见「追评内容」列，不单独成行</span>
+      </div>
+      <div class="field inline">
+        <label for="review-rating">评分</label>
+        <select id="review-rating" name="rating" data-testid="review-rating">
+          {% for v, t in rating_options %}
+          <option value="{{ v }}" {% if filters.rating == v %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field inline">
+        <label for="review-has-append">是否存在追评</label>
+        <select id="review-has-append" name="has_append" data-testid="review-has-append">
+          {% for v, t in append_options %}
+          <option value="{{ v }}" {% if filters.has_append == v %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field inline">
+        <label for="review-page-size">每页条数</label>
+        <select id="review-page-size" name="size" data-testid="review-page-size">
+          {% for s in size_options %}
+          <option value="{{ s }}" {% if size == s %}selected{% endif %}>{{ s }} 条/页</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="filter-actions">
+      <button type="submit" class="btn btn-primary" id="review-search" data-testid="review-search">查询</button>
+      <button type="button" class="btn btn-default" id="review-reset" data-testid="review-reset">重置</button>
+      <button type="button" class="btn btn-export {% if total == 0 %}is-disabled{% endif %}"
+              id="review-export" data-testid="review-export"
+              {% if total == 0 %}disabled title="当前筛选结果为空，无可导出数据"{% endif %}>导出评价</button>
+    </div>
+  </form>
+</div>
+
+<div class="card table-card">
+  {% if total == 0 %}
+  <div class="empty-state" id="empty-state" data-testid="empty-state">
+    <div class="empty-icon">∅</div>
+    <div class="empty-text" id="empty-text" data-testid="empty-text">暂无符合条件的评价</div>
+    <div class="empty-sub">请调整筛选条件后重新查询。当前条件下无可导出数据。</div>
+  </div>
+  {% else %}
+  <div class="table-scroll">
+    <table class="review-table" id="review-table" data-testid="review-table">
+      <thead>
+        <tr>
+          <th>首评时间</th>
+          <th>最后活动时间</th>
+          <th>店铺名称</th>
+          <th>商品ID</th>
+          <th>商品名称</th>
+          <th>SKU</th>
+          <th>订单号</th>
+          <th>买家账号标识</th>
+          <th>评分</th>
+          <th class="col-text">评价内容</th>
+          <th>是否追评</th>
+          <th class="col-text">卖家回复</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="review-row" data-testid="review-row" data-review-id="{{ r.review_id }}">
+          <td class="nowrap" data-testid="cell-review-time">{{ r.review_time }}</td>
+          <td class="nowrap" data-testid="cell-last-activity">
+            {{ r.last_activity_time }}
+            {% if r.append_review_text %}<span class="tag tag-append">追评</span>{% endif %}
+          </td>
+          <td>{{ r.shop_name }}</td>
+          <td class="mono">{{ r.item_id }}</td>
+          <td>{{ r.item_name }}</td>
+          <td class="mono">{{ r.sku_name }}</td>
+          <td class="mono">{{ r.order_id }}</td>
+          <td class="mono">{{ r.buyer_id }}</td>
+          <td>
+            <span class="rating rating-{{ r.rating }}" data-testid="cell-rating">{{ r.rating }}星</span>
+            {% if r.review_type == '追评' %}<span class="tag tag-append">追评</span>{% endif %}
+          </td>
+          <td class="col-text" data-testid="cell-review-text">
+            <div class="review-main">{{ r.review_text }}</div>
+            {% if r.append_review_text %}
+            <div class="append-line" data-testid="cell-append-line">
+              <span class="append-badge">[追评]</span>
+              <span class="append-body" data-testid="cell-append-text">{{ r.append_review_text }}</span>
+              <span class="append-time" data-testid="cell-append-time">{{ r.append_review_time }}</span>
+            </div>
+            {% endif %}
+          </td>
+          <td data-testid="cell-has-append">{{ r.has_append }}</td>
+          <td class="col-text muted">{{ r.seller_reply or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="pager" id="review-pager" data-testid="review-pager">
+    <div class="pager-info">第 {{ page }} / {{ pages }} 页 · 共 {{ total }} 条</div>
+    <div class="pager-btns">
+      <a class="pager-btn {% if page <= 1 %}is-disabled{% endif %}"
+         id="review-page-prev" data-testid="review-page-prev"
+         href="{{ page_url(1) if page <= 1 else page_url(page-1) }}">首页</a>
+      <a class="pager-btn {% if page <= 1 %}is-disabled{% endif %}"
+         id="review-page-prev2" data-testid="review-page-prev2"
+         href="{{ page_url(1) if page <= 1 else page_url(page-1) }}">上一页</a>
+      {% set lo = [1, page-2] | max %}
+      {% set hi = [pages, page+2] | min %}
+      {% if lo > 1 %}<span class="pager-gap">…</span>{% endif %}
+      {% for p in range(lo, hi+1) %}
+      <a class="pager-btn {% if p == page %}is-active{% endif %}"
+         href="{{ page_url(p) }}">{{ p }}</a>
+      {% endfor %}
+      {% if hi < pages %}<span class="pager-gap">…</span>{% endif %}
+      <a class="pager-btn {% if page >= pages %}is-disabled{% endif %}"
+         id="review-page-next" data-testid="review-page-next"
+         href="{{ page_url(pages) if page >= pages else page_url(page+1) }}">下一页</a>
+      <a class="pager-btn {% if page >= pages %}is-disabled{% endif %}"
+         id="review-page-last" data-testid="review-page-last"
+         href="{{ page_url(pages) }}">末页</a>
+    </div>
+  </div>
+  {% endif %}
+</div>
+
+<!-- 导出遮罩 -->
+<div class="overlay" id="export-overlay" data-testid="export-overlay" hidden>
+  <div class="overlay-box">
+    <div class="spinner"></div>
+    <div class="overlay-text" id="export-status" data-testid="export-status">正在生成文件……</div>
+    <div class="overlay-sub">请勿关闭页面</div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var form = document.getElementById('review-filter-form');
+  var exportBtn = document.getElementById('review-export');
+  var overlay = document.getElementById('export-overlay');
+  var statusEl = document.getElementById('export-status');
+  var totalNow = parseInt(document.getElementById('result-total').textContent, 10) || 0;
+
+  // 重置：清空所有筛选条件后回到默认列表
+  var resetBtn = document.getElementById('review-reset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function () {
+      window.location.href = '/reviews';
+    });
+  }
+
+  // 每页条数变化自动查询
+  var sizeSel = document.getElementById('review-page-size');
+  if (sizeSel) {
+    sizeSel.addEventListener('change', function () { form.submit(); });
+  }
+
+  function buildExportUrl() {
+    var f = form.elements;
+    var params = new URLSearchParams();
+    ['date_start', 'date_end', 'shop', 'q', 'type', 'rating', 'has_append', 'range'].forEach(function (n) {
+      var el = f[n];
+      if (el && el.value) params.append(n, el.value);
+    });
+    return '/export?' + params.toString();
+  }
+
+  if (exportBtn) {
+    exportBtn.addEventListener('click', function () {
+      if (exportBtn.disabled) {
+        showToast('暂无可导出数据', 'warn');
+        return;
+      }
+      overlay.hidden = false;
+      statusEl.textContent = '正在生成文件……';
+      // 模拟后台生成耗时 2~3 秒
+      setTimeout(function () {
+        statusEl.textContent = '文件生成成功';
+        showToast('文件生成成功，开始下载', 'ok');
+        window.location.href = buildExportUrl();
+        setTimeout(function () { overlay.hidden = true; }, 1200);
+      }, 2500);
+    });
+  }
+})();
+</script>
+{% endblock %}

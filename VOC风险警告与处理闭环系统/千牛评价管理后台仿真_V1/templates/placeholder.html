@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · 商家工作台 Demo{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1 class="page-title" id="page-title" data-testid="page-title">{{ title }}</h1>
+</div>
+
+{% if guide %}
+<div class="card welcome">
+  <h2>Demo 环境说明</h2>
+  <p>这是一套<strong>本地运行的商家后台仿真环境</strong>，用于测试影刀 RPA 的浏览器自动化流程
+     （登录 → 评价管理 → 筛选 → 查询 → 导出 CSV）。</p>
+  <ul>
+    <li>全部数据为<strong>虚构仿真数据</strong>，不含真实消费者、真实店铺、真实订单信息</li>
+    <li>不接入任何真实平台接口，不做登录绕过、不做验证码绕过、不做爬虫</li>
+    <li>V1 仅实现「评价管理」模块，其余菜单为界面占位</li>
+  </ul>
+  <a class="btn btn-primary" id="goto-reviews" data-testid="goto-reviews"
+     href="{{ url_for('reviews_page') }}">进入评价管理</a>
+</div>
+
+<div class="stat-row">
+  <div class="stat-card"><div class="stat-num">{{ stats.total }}</div><div class="stat-label">仿真评价总数</div></div>
+  <div class="stat-card"><div class="stat-num stat-bad">{{ stats.bad }}</div><div class="stat-label">1-2 星差评</div></div>
+  <div class="stat-card"><div class="stat-num">{{ stats.append }}</div><div class="stat-label">存在追评的评价</div></div>
+  <div class="stat-card"><div class="stat-num stat-bad">{{ stats.risk }}</div><div class="stat-label">疑似不适反馈样本（P0/P1 候选）</div></div>
+</div>
+{% endif %}
+
+<div class="card placeholder-card">
+  <div class="placeholder-icon">○</div>
+  <div class="placeholder-text" id="placeholder-text" data-testid="placeholder-text">
+    当前模块仅作为界面占位，Demo V1 未开放。
+  </div>
+  <div class="placeholder-sub">如需测试完整流程，请从左侧菜单进入「评价管理」。</div>
+</div>
+{% endblock %}

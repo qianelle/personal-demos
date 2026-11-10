@@ -1,0 +1,621 @@
+{
+  "name": "VOC_03_FeishuRiskSync_v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "n8n-voc03-trigger",
+      "name": "When clicking ‘Execute workflow’",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1024,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- ============================================================\n-- Read Current Analysis Snapshot - PostgreSQL (READ ONLY)\n--\n-- 为什么不能只读 P0/P1：\n--   原本 P0/P1 的工单，后续降级成 P2/P3/NONE 时，\n--   必须能把飞书工单改成「已失效」。\n--   因此快照取「当前有效 + 分析成功」的全集，\n--   由 Planner 判断具体的等级归属。\n--\n-- 为什么用 LEFT JOIN 而不是 INNER JOIN：\n--   analysis_results 有结果但 raw_reviews 缺失，\n--   必须能被 Planner 识别为「数据关联异常」并输出 ERROR，\n--   不能静默丢弃。\n-- ============================================================\n\nSELECT\n    a.analysis_id,\n    a.content_key,\n\n    a.analysis_scope,\n    a.analysis_status,\n\n    a.final_risk_level,\n    a.final_summary,\n    a.final_category,\n    a.final_subcategory,\n\n    r.source_review_id,\n    r.content_text,\n    r.product_name,\n    r.sku_name,\n    r.product_rating,\n    r.platform,\n    r.shop_name,\n    r.content_time,\n    r.product_id,\n    r.sku_id\n\nFROM voc.analysis_results a\nLEFT JOIN voc.raw_reviews r\n    ON r.content_key = a.content_key\n\nWHERE a.is_current = TRUE\n  AND a.analysis_status = 'SUCCESS'\n\nORDER BY\n    a.final_risk_level,\n    a.analysis_id\n",
+        "options": {}
+      },
+      "id": "n8n-voc03-snapshot",
+      "name": "Read Current Analysis Snapshot - PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -816,
+        304
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpTemplatedCustomAuth",
+        "options": {}
+      },
+      "id": "n8n-voc03-token",
+      "name": "Get Feishu Access Token v1.0",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -384,
+        304
+      ],
+      "credentials": {
+        "httpTemplatedCustomAuth": {
+          "id": "j0JvQXyh3XHzhG7b",
+          "name": "Simplified Custom Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://open.feishu.cn/open-apis/bitable/v1/apps/Q4m0bL0ltaipFZssHhwctC7UnJd/tables/tbliyndQlid5p5vy/records",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "page_size",
+              "value": "200"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.tenant_access_token }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n8n-voc03-read-feishu",
+      "name": "Read Existing Risk Workbench v2 v1.0",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -160,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Normalize Existing Feishu Records v1.0\n//\n// 职责：\n// 1. 读取「消费者评价风险处理台_v2」现有业务记录（只读）\n// 2. 建立 alert_key -> Feishu record 索引\n// 3. 检测重复 alert_key\n// 4. 输出规范化后的记录，供 Planner 消费\n//\n// 本节点不修改飞书。\n//\n// alert_key = content_key + \"::RISK\"\n//\n// 重复 alert_key 处理原则：\n// 不自动挑选任何一个。\n// 由 Planner 对该 content_key 输出 ERROR_DUPLICATE_ALERT_KEY，\n// 并禁止后续写入。\n// ============================================================\n\nconst response = $input.first().json;\n\n// ------------------------------------------------------------\n// 1. 校验飞书读取结果\n// ------------------------------------------------------------\n\nif (!response || response.code !== 0) {\n  throw new Error(\n    `Normalize Existing Feishu Records v1.0: 飞书 v2 读取失败，code=${response?.code}, msg=${response?.msg}`\n  );\n}\n\nconst data = response.data || {};\n\n// 空表时 items 可能为 null\nconst items = Array.isArray(data.items) ? data.items : [];\n\n// ------------------------------------------------------------\n// 2. 安全优先：如果还有下一页，宁可失败也不静默丢数据\n// ------------------------------------------------------------\n\nif (data.has_more === true) {\n  throw new Error(\n    `Normalize Existing Feishu Records v1.0: 飞书 v2 记录数超过单页上限（total=${data.total}），` +\n    `请先为工作流增加分页循环，禁止在缺页状态下做同步规划。`\n  );\n}\n\n// ------------------------------------------------------------\n// 3. 字段取值工具\n//\n// 飞书不同接口版本对单选 / 文本 / 人员 的返回形态不完全一致，\n// 这里统一归一化，避免 Planner 里到处判断。\n// ------------------------------------------------------------\n\nfunction one(value) {\n  if (value === undefined || value === null) {\n    return null;\n  }\n\n  if (Array.isArray(value)) {\n    return value.length > 0 ? value[0] : null;\n  }\n\n  return value;\n}\n\nfunction fsText(value) {\n  const v = one(value);\n  return v === null ? null : String(v);\n}\n\nfunction fsSelect(value) {\n  const v = one(value);\n  return v === null ? null : String(v);\n}\n\nfunction fsNumber(value) {\n  const v = one(value);\n\n  if (v === null || v === '') {\n    return null;\n  }\n\n  const n = Number(v);\n\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction fsDateTime(value) {\n  const v = one(value);\n\n  if (v === null || v === '') {\n    return null;\n  }\n\n  const n = Number(v);\n\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction fsUserIds(value) {\n  if (!Array.isArray(value)) {\n    return null;\n  }\n\n  const ids = value\n    .map(u => (u && u.id) ? String(u.id) : null)\n    .filter(Boolean);\n\n  return ids.length > 0 ? ids : null;\n}\n\n// ------------------------------------------------------------\n// 4. 规范化每条记录\n// ------------------------------------------------------------\n\nconst records = items.map(record => {\n\n  const fields = record.fields || {};\n\n  const contentKey = fsText(fields['content_key']);\n\n  return {\n    record_id: record.record_id || null,\n\n    alert_key: fsText(fields['alert_key']),\n\n    content_key: contentKey,\n    analysis_id: fsNumber(fields['analysis_id']),\n\n    风险等级: fsSelect(fields['风险等级']),\n    处理状态: fsSelect(fields['处理状态']),\n\n    风险摘要: fsText(fields['风险摘要']),\n    原始评价: fsText(fields['原始评价']),\n    风险类别: fsSelect(fields['风险类别']),\n    风险子类: fsText(fields['风险子类']),\n\n    商品名称: fsText(fields['商品名称']),\n    商品链接: fsText(fields['商品链接']),\n    SKU名称: fsText(fields['SKU名称']),\n    商品评分: fsNumber(fields['商品评分']),\n\n    平台: fsSelect(fields['平台']),\n    店铺: fsSelect(fields['店铺']),\n\n    评价时间: fsDateTime(fields['评价时间']),\n    评价ID: fsText(fields['评价ID']),\n\n    商品ID: fsText(fields['商品ID']),\n    SKU_ID: fsText(fields['SKU_ID']),\n\n    负责人: fsUserIds(fields['负责人']),\n    处理备注: fsText(fields['处理备注']),\n\n    首次同步时间: fsDateTime(fields['首次同步时间']),\n    最近同步时间: fsDateTime(fields['最近同步时间'])\n  };\n});\n\n// ------------------------------------------------------------\n// 5. 重复 alert_key 检测\n//\n// 同一个 alert_key 对应多条飞书记录时：\n// 不做任何自动取舍。\n// ------------------------------------------------------------\n\nconst alertKeyCount = {};\n\nfor (const record of records) {\n  const key = record.alert_key;\n\n  if (!key) {\n    continue;\n  }\n\n  alertKeyCount[key] = (alertKeyCount[key] || 0) + 1;\n}\n\nconst duplicateAlertKeys =\n  Object.keys(alertKeyCount)\n    .filter(key => alertKeyCount[key] > 1);\n\n// ------------------------------------------------------------\n// 6. 输出\n//\n// 输出 1 个 item，包含：\n// - feishu_total\n// - duplicate_alert_keys\n// - records[]\n// ============================================================\n\nreturn [\n  {\n    json: {\n      feishu_table: '消费者评价风险处理台_v2',\n      feishu_total: records.length,\n      duplicate_alert_keys: duplicateAlertKeys,\n      records: records\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-normalize",
+      "name": "Normalize Existing Feishu Records v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Plan Feishu Risk Sync v1.0\n//\n// 职责：\n// PostgreSQL current analysis snapshot\n//   -> 与飞书 v2 现有工单对比\n//   -> 输出 sync_action\n//\n// sync_action 取值：\n// CREATE     飞书无对应 alert_key，且 PG 当前为 P0/P1 有效风险\n// UPDATE     飞书已有 alert_key，需要刷新系统字段 / 状态迁移\n// INVALIDATE PG 当前不再是有效风险（OUT_OF_SCOPE 或 P2/P3/NONE），飞书置「已失效」\n// NOOP       无需任何变更；不刷新「最近同步时间」\n// ERROR      数据或状态无法安全解释，禁止写入\n//\n// 本节点只生成计划。\n// 绝不调用任何飞书写接口。\n// ============================================================\n\n\n// ============================================================\n// 0. 输入\n// ============================================================\n\nconst snapshotRows =\n  $('Read Current Analysis Snapshot - PostgreSQL')\n    .all()\n    .map(item => item.json);\n\nconst feishuState =\n  $('Normalize Existing Feishu Records v1.0')\n    .first().json;\n\nconst feishuRecords =\n  Array.isArray(feishuState.records) ? feishuState.records : [];\n\nconst duplicateAlertKeys =\n  new Set(\n    Array.isArray(feishuState.duplicate_alert_keys)\n      ? feishuState.duplicate_alert_keys\n      : []\n  );\n\n\n// ============================================================\n// 1. 常量与白名单\n// ============================================================\n\nconst VALID_RISK_LEVELS = ['P0', 'P1'];\n\nconst STATUS_PENDING = '待处理';\nconst STATUS_INVALID = '已失效';\n\nconst KNOWN_ANALYSIS_SCOPES = ['IN_SCOPE', 'OUT_OF_SCOPE'];\n\n// 首次创建时允许写入的系统 + 状态字段\nconst CREATE_FIELDS = [\n  '风险等级', '处理状态', '负责人', '处理备注',\n  '风险摘要', '原始评价', '风险类别', '风险子类',\n  '商品名称', '商品链接', 'SKU名称', '商品评分',\n  '平台', '店铺', '评价时间', '评价ID',\n  'alert_key', 'content_key', 'analysis_id', '商品ID', 'SKU_ID',\n  '首次同步时间', '最近同步时间'\n];\n\n// 普通 UPDATE 允许写入 —— 明确不含：\n// 负责人 / 处理备注（人工字段，无条件保护）\n// 首次同步时间（CREATE only）\nconst UPDATE_SYSTEM_FIELDS = [\n  '风险等级',\n  '风险摘要', '原始评价', '风险类别', '风险子类',\n  '商品名称', '商品链接', 'SKU名称', '商品评分',\n  '平台', '店铺', '评价时间', '评价ID',\n  'alert_key', 'content_key', 'analysis_id', '商品ID', 'SKU_ID',\n  '最近同步时间'\n];\n\n// INVALIDATE 只允许写这 3 个字段\nconst INVALIDATE_FIELDS = [\n  '处理状态', 'analysis_id', '最近同步时间'\n];\n\nconst syncTimestampMs = Date.now();\n\n\n// ============================================================\n// 2. 工具函数\n// ============================================================\n\nfunction normalizeNullable(value) {\n\n  if (value === undefined || value === null || value === '') {\n    return null;\n  }\n\n  return String(value);\n}\n\nfunction alertKeyOf(contentKey) {\n  return String(contentKey) + '::RISK';\n}\n\n// ------------------------------------------------------------\n// 时区规则（关键）\n//\n// raw_reviews.content_time 是 timestamp WITHOUT time zone。\n// 业务语义固定为 Asia/Shanghai。\n//\n// 因此：\n// 不带时区信息的字符串 -> 显式补 +08:00 再解析\n// 已带 Z / +08:00      -> 直接解析\n//\n// 绝不允许依赖运行环境时区产生 ±8 小时漂移。\n// ------------------------------------------------------------\nfunction toShanghaiTimestamp(value) {\n\n  if (value === null || value === undefined || value === '') {\n    return null;\n  }\n\n  if (typeof value === 'number' && Number.isFinite(value)) {\n    return value;\n  }\n\n  const text = String(value).trim();\n\n  const hasExplicitZone =\n    /Z$/i.test(text) || /[+-]\\d{2}:?\\d{2}$/.test(text);\n\n  if (hasExplicitZone) {\n\n    const ts = Date.parse(text);\n\n    if (Number.isNaN(ts)) {\n      throw new Error(`无法解析日期时间：${value}`);\n    }\n\n    return ts;\n  }\n\n  const normalized =\n    text.indexOf('T') >= 0 ? text : text.replace(' ', 'T');\n\n  const ts = Date.parse(`${normalized}+08:00`);\n\n  if (Number.isNaN(ts)) {\n    throw new Error(`无法解析日期时间：${value}`);\n  }\n\n  return ts;\n}\n\n// ------------------------------------------------------------\n// 系统字段 signature\n//\n// 用于判断「飞书当前系统字段是否已经过期」。\n// 不含 analysis_id（单独判断）\n// 不含 负责人 / 处理备注 / 处理状态（人工字段）\n// 不含 首次同步时间 / 最近同步时间（同步运维字段）\n// ------------------------------------------------------------\nfunction buildSystemSignature(source) {\n\n  return JSON.stringify({\n    风险等级: normalizeNullable(source['风险等级']),\n    风险摘要: normalizeNullable(source['风险摘要']),\n    原始评价: normalizeNullable(source['原始评价']),\n    风险类别: normalizeNullable(source['风险类别']),\n    风险子类: normalizeNullable(source['风险子类']),\n    商品名称: normalizeNullable(source['商品名称']),\n    商品链接: normalizeNullable(source['商品链接']),\n    SKU名称: normalizeNullable(source['SKU名称']),\n    商品评分: source['商品评分'] === null || source['商品评分'] === undefined\n      ? null\n      : String(source['商品评分']),\n    平台: normalizeNullable(source['平台']),\n    店铺: normalizeNullable(source['店铺']),\n    评价时间: source['评价时间_feishu'] === null || source['评价时间_feishu'] === undefined\n      ? null\n      : String(source['评价时间_feishu']),\n    评价ID: normalizeNullable(source['评价ID']),\n    商品ID: normalizeNullable(source['商品ID']),\n    SKU_ID: normalizeNullable(source['SKU_ID'])\n  });\n}\n\n\n// ============================================================\n// 3. 建立 alert_key -> Feishu record 索引\n// ============================================================\n\nconst recordIndexByAlertKey = {};\n\nfor (const record of feishuRecords) {\n\n  const key = record.alert_key;\n\n  if (!key) {\n    continue;\n  }\n\n  if (!recordIndexByAlertKey[key]) {\n    recordIndexByAlertKey[key] = [];\n  }\n\n  recordIndexByAlertKey[key].push(record);\n}\n\nconst consumedRecordIds = new Set();\n\n\n// ============================================================\n// 4. 逐条规划\n// ============================================================\n\nconst plans = [];\n\nfor (const row of snapshotRows) {\n\n  const contentKey = normalizeNullable(row.content_key);\n  const alertKey = contentKey ? alertKeyOf(contentKey) : null;\n\n  const analysisId = row.analysis_id === null || row.analysis_id === undefined\n    ? null\n    : Number(row.analysis_id);\n\n  const analysisScope = normalizeNullable(row.analysis_scope);\n  const analysisStatus = normalizeNullable(row.analysis_status);\n  const newRiskLevel = normalizeNullable(row.final_risk_level);\n\n  const feishuMatched = alertKey ? (recordIndexByAlertKey[alertKey] || []) : [];\n\n  for (const r of feishuMatched) {\n    if (r.record_id) {\n      consumedRecordIds.add(r.record_id);\n    }\n  }\n\n  let contentTimeOriginal = null;\n  let contentTimeFeishu = null;\n\n  if (row.content_time !== null && row.content_time !== undefined) {\n    contentTimeOriginal = String(row.content_time);\n    contentTimeFeishu = toShanghaiTimestamp(row.content_time);\n  }\n\n  // ----------------------------------------------------------\n  // 基础行\n  // ----------------------------------------------------------\n  const base = {\n  content_key: contentKey,\n  alert_key: alertKey,\n  analysis_id: analysisId,\n  feishu_record_id: feishuMatched.length === 1\n    ? feishuMatched[0].record_id\n    : null,\n\n  new_risk_level: newRiskLevel,\n  analysis_scope: analysisScope,\n  analysis_status: analysisStatus,\n\n  content_time_original: contentTimeOriginal,\n  content_time_feishu: contentTimeFeishu,\n\n  platform: normalizeNullable(row.platform),\n  shop_name: normalizeNullable(row.shop_name),\n\n  // 商品 / 评价业务字段\n  content_text: normalizeNullable(row.content_text),\n  product_id: normalizeNullable(row.product_id),\n  product_name: normalizeNullable(row.product_name),\n  sku_id: normalizeNullable(row.sku_id),\n  sku_name: normalizeNullable(row.sku_name),\n  product_rating:\n    row.product_rating === null || row.product_rating === undefined\n      ? null\n      : Number(row.product_rating),\n\n  source_review_id: normalizeNullable(row.source_review_id),\n\n  // 风险分析结果\n  risk_summary: normalizeNullable(row.final_summary),\n  risk_category: normalizeNullable(row.final_category),\n  risk_subcategory: normalizeNullable(row.final_subcategory),\n\n  sync_planned_at: new Date(syncTimestampMs).toISOString()\n};\n\n  // ----------------------------------------------------------\n  // 异常保护 1：重复 alert_key\n  // 禁止自动挑选，禁止该 content_key 后续写入\n  // ----------------------------------------------------------\n  if (alertKey && duplicateAlertKeys.has(alertKey)) {\n\n    plans.push({\n      ...base,\n      sync_action: 'ERROR',\n      sync_reason: 'ERROR_DUPLICATE_ALERT_KEY: 同一 alert_key 在飞书 v2 中存在多条记录，禁止自动选取，禁止本次继续执行写入。',\n      error_code: 'ERROR_DUPLICATE_ALERT_KEY',\n      duplicate_record_count: feishuMatched.length,\n      duplicate_record_ids: feishuMatched.map(r => r.record_id),\n      old_risk_level: null,\n      old_processing_status: null,\n      target_processing_status: null,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  // ----------------------------------------------------------\n  // 异常保护 2：关联的 raw_reviews 缺失\n  // ----------------------------------------------------------\n  if (!row.source_review_id && !row.content_text) {\n\n    plans.push({\n      ...base,\n      sync_action: 'ERROR',\n      sync_reason: 'ERROR_RAW_REVIEW_MISSING: analysis_results 存在 current 分析，但 raw_reviews 未关联到对应 content_key，数据关联异常。',\n      error_code: 'ERROR_RAW_REVIEW_MISSING',\n      old_risk_level: null,\n      old_processing_status: null,\n      target_processing_status: null,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  // ----------------------------------------------------------\n  // 异常保护 3：analysis_scope / analysis_status 无法解释\n  // ----------------------------------------------------------\n  if (!analysisScope || KNOWN_ANALYSIS_SCOPES.indexOf(analysisScope) < 0) {\n\n    plans.push({\n      ...base,\n      sync_action: 'ERROR',\n      sync_reason: `ERROR_UNEXPLAINABLE_SCOPE: analysis_scope=${analysisScope} 无法解释，禁止自动变更飞书工单。`,\n      error_code: 'ERROR_UNEXPLAINABLE_SCOPE',\n      old_risk_level: null,\n      old_processing_status: null,\n      target_processing_status: null,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  if (analysisStatus !== 'SUCCESS') {\n\n    plans.push({\n      ...base,\n      sync_action: 'ERROR',\n      sync_reason: `ERROR_ANALYSIS_NOT_SUCCESS: analysis_status=${analysisStatus}，禁止自动失效或写入。`,\n      error_code: 'ERROR_ANALYSIS_NOT_SUCCESS',\n      old_risk_level: null,\n      old_processing_status: null,\n      target_processing_status: null,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  // ----------------------------------------------------------\n  // 业务判定准备\n  // ----------------------------------------------------------\n  const isInScope = analysisScope === 'IN_SCOPE';\n  const isActiveRisk = VALID_RISK_LEVELS.indexOf(newRiskLevel) >= 0;\n  const isSyncCandidate = isInScope && isActiveRisk;\n\n  const existing = feishuMatched.length === 1 ? feishuMatched[0] : null;\n  const oldRiskLevel = existing ? existing['风险等级'] : null;\n  const oldStatus = existing ? existing['处理状态'] : null;\n\n  // PG 侧应有的系统字段值\n  const pgSystemView = {\n    风险等级: isSyncCandidate ? newRiskLevel : (existing ? existing['风险等级'] : null),\n    风险摘要: normalizeNullable(row.final_summary),\n    原始评价: normalizeNullable(row.content_text),\n    风险类别: normalizeNullable(row.final_category),\n    风险子类: normalizeNullable(row.final_subcategory),\n    商品名称: normalizeNullable(row.product_name),\n    商品链接: null,\n    SKU名称: normalizeNullable(row.sku_name),\n    商品评分: row.product_rating === null || row.product_rating === undefined\n      ? null\n      : Number(row.product_rating),\n    平台: normalizeNullable(row.platform),\n    店铺: normalizeNullable(row.shop_name),\n    评价时间_feishu: contentTimeFeishu,\n    评价ID: normalizeNullable(row.source_review_id),\n    商品ID: normalizeNullable(row.product_id),\n    SKU_ID: normalizeNullable(row.sku_id)\n  };\n\n  const feishuSystemView = existing\n    ? {\n        风险等级: existing['风险等级'],\n        风险摘要: existing['风险摘要'],\n        原始评价: existing['原始评价'],\n        风险类别: existing['风险类别'],\n        风险子类: existing['风险子类'],\n        商品名称: existing['商品名称'],\n        商品链接: existing['商品链接'],\n        SKU名称: existing['SKU名称'],\n        商品评分: existing['商品评分'],\n        平台: existing['平台'],\n        店铺: existing['店铺'],\n        评价时间_feishu: existing['评价时间'],\n        评价ID: existing['评价ID'],\n        商品ID: existing['商品ID'],\n        SKU_ID: existing['SKU_ID']\n      }\n    : null;\n\n  const analysisIdChanged = existing\n    ? (existing['analysis_id'] !== analysisId)\n    : true;\n\n  const systemFieldsStale = existing\n    ? (buildSystemSignature(pgSystemView) !== buildSystemSignature(feishuSystemView))\n    : true;\n\n  // ==========================================================\n  // 分支 A：飞书不存在该 alert_key\n  // ==========================================================\n  if (!existing) {\n\n    if (isSyncCandidate) {\n\n      plans.push({\n        ...base,\n        sync_action: 'CREATE',\n        sync_reason: 'CREATE_NEW_RISK_TICKET: PG 当前为 IN_SCOPE / SUCCESS / P0|P1，飞书无对应 alert_key，创建客服工单。',\n        error_code: null,\n        old_risk_level: null,\n        old_processing_status: null,\n        target_processing_status: STATUS_PENDING,\n        system_fields_to_write: CREATE_FIELDS,\n        preserve_human_fields: false\n      });\n\n    } else {\n\n      plans.push({\n        ...base,\n        sync_action: 'NOOP',\n        sync_reason: `NOOP_NOT_RISK_AND_NO_TICKET: analysis_scope=${analysisScope}, final_risk_level=${newRiskLevel}，本就不需要飞书工单。`,\n        error_code: null,\n        old_risk_level: null,\n        old_processing_status: null,\n        target_processing_status: null,\n        system_fields_to_write: []\n      });\n\n    }\n\n    continue;\n  }\n\n  // ==========================================================\n  // 分支 B：飞书已存在该 alert_key，但 PG 当前不再是有效风险\n  // -> INVALIDATE（禁止删除，禁止写 P2/P3/NONE 到风险等级）\n  // ==========================================================\n  if (!isSyncCandidate) {\n\n    const alreadyInvalid = oldStatus === STATUS_INVALID;\n\n    if (alreadyInvalid && !analysisIdChanged) {\n\n      plans.push({\n        ...base,\n        sync_action: 'NOOP',\n        sync_reason: `NOOP_ALREADY_INVALID: 飞书已为「已失效」且 analysis_id 未变化（${analysisId}），不重复刷新最近同步时间。`,\n        error_code: null,\n        old_risk_level: oldRiskLevel,\n        old_processing_status: oldStatus,\n        target_processing_status: STATUS_INVALID,\n        system_fields_to_write: []\n      });\n\n    } else {\n\n      plans.push({\n        ...base,\n        sync_action: 'INVALIDATE',\n        sync_reason: `INVALIDATE_RISK_GONE: analysis_scope=${analysisScope}, final_risk_level=${newRiskLevel}，工单置「已失效」，保留负责人 / 处理备注 / 首次同步时间；风险等级不改写为 P2/P3/NONE。`,\n        error_code: null,\n        old_risk_level: oldRiskLevel,\n        old_processing_status: oldStatus,\n        target_processing_status: STATUS_INVALID,\n        system_fields_to_write: INVALIDATE_FIELDS\n      });\n\n    }\n\n    continue;\n  }\n\n  // ==========================================================\n  // 分支 C：飞书已存在，PG 当前仍是 P0/P1 有效风险\n  // ==========================================================\n\n  let targetStatus = oldStatus;\n  let statusReason = null;\n\n  // C-1 风险升级：P1 -> P0，强制回到「待处理」\n  if (oldRiskLevel === 'P1' && newRiskLevel === 'P0') {\n\n    targetStatus = STATUS_PENDING;\n    statusReason = 'RISK_UPGRADED_P1_TO_P0';\n\n  }\n  // C-2 重新激活：已失效的工单重新成为有效风险\n  else if (oldStatus === STATUS_INVALID) {\n\n    targetStatus = STATUS_PENDING;\n    statusReason = 'REACTIVATED_FROM_INVALID';\n\n  }\n  // C-3 风险降级 P0 -> P1：状态保持原样\n  else if (oldRiskLevel === 'P0' && newRiskLevel === 'P1') {\n\n    targetStatus = oldStatus;\n    statusReason = 'RISK_DOWNGRADED_P0_TO_P1_KEEP_STATUS';\n\n  }\n  // C-4 人工状态保护：其余情况不覆盖人工状态\n  else {\n\n    targetStatus = oldStatus;\n    statusReason = 'KEEP_HUMAN_STATUS';\n\n  }\n\n  const statusChanged = targetStatus !== oldStatus;\n\n  const needsUpdate =\n    analysisIdChanged ||\n    systemFieldsStale ||\n    statusChanged;\n\n  if (!needsUpdate) {\n\n    plans.push({\n      ...base,\n      sync_action: 'NOOP',\n      sync_reason: `NOOP_EVERYTHING_CURRENT: analysis_id=${analysisId} 未变化，系统字段一致，无需状态修正。NOOP 不刷新最近同步时间。`,\n      error_code: null,\n      old_risk_level: oldRiskLevel,\n      old_processing_status: oldStatus,\n      target_processing_status: oldStatus,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  const fields = UPDATE_SYSTEM_FIELDS.slice();\n\n  if (statusChanged) {\n    fields.push('处理状态');\n  }\n\n  plans.push({\n    ...base,\n    sync_action: 'UPDATE',\n    sync_reason: `UPDATE_SYSTEM_FIELDS: analysis_id_changed=${analysisIdChanged}, system_fields_stale=${systemFieldsStale}, status_rule=${statusReason}。保留负责人 / 处理备注 / 首次同步时间。`,\n    error_code: null,\n    old_risk_level: oldRiskLevel,\n    old_processing_status: oldStatus,\n    target_processing_status: targetStatus,\n    system_fields_to_write: fields,\n    status_rule: statusReason\n  });\n}\n\n\n// ============================================================\n// 5. 孤儿飞书工单检测\n//\n// 飞书有记录，但 PG 当前找不到对应的 SUCCESS current analysis。\n// 可能是：\n// - content_key 根本没有 current analysis\n// - 当前 analysis_status = ERROR\n// - 数据关联异常\n//\n// 按异常保护规则 13：\n// 绝对不能因为查不到结果就把工单自动设为已失效。\n// ============================================================\n\nfor (const record of feishuRecords) {\n\n  if (record.record_id && consumedRecordIds.has(record.record_id)) {\n    continue;\n  }\n\n  const key = record.alert_key;\n\n  if (!key) {\n\n    plans.push({\n      content_key: record.content_key,\n      alert_key: null,\n      analysis_id: record.analysis_id,\n      feishu_record_id: record.record_id,\n      sync_action: 'ERROR',\n      sync_reason: 'ERROR_FEISHU_RECORD_WITHOUT_ALERT_KEY: 飞书工单缺少 alert_key，无法参与幂等匹配，禁止自动处理。',\n      error_code: 'ERROR_FEISHU_RECORD_WITHOUT_ALERT_KEY',\n      old_risk_level: record['风险等级'],\n      old_processing_status: record['处理状态'],\n      target_processing_status: null,\n      system_fields_to_write: []\n    });\n\n    continue;\n  }\n\n  if (duplicateAlertKeys.has(key)) {\n    continue;\n  }\n\n  plans.push({\n    content_key: record.content_key,\n    alert_key: key,\n    analysis_id: record.analysis_id,\n    feishu_record_id: record.record_id,\n    sync_action: 'ERROR',\n    sync_reason: 'ERROR_ORPHAN_FEISHU_RECORD: 飞书存在工单，但 PG 当前没有对应的 SUCCESS current analysis（可能为 ERROR 状态 / 无 current 记录 / 关联异常）。按异常保护规则，禁止自动置为已失效。',\n    error_code: 'ERROR_ORPHAN_FEISHU_RECORD',\n    old_risk_level: record['风险等级'],\n    old_processing_status: record['处理状态'],\n    target_processing_status: null,\n    system_fields_to_write: []\n  });\n}\n\n\n// ============================================================\n// 6. 输出\n// ============================================================\n\nreturn plans.map(plan => ({ json: plan }));\n"
+      },
+      "id": "n8n-voc03-planner",
+      "name": "Plan Feishu Risk Sync v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        304,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 5,
+        "output": "={{ $json.sync_action === 'CREATE' ? 0 : $json.sync_action === 'UPDATE' ? 1 : $json.sync_action === 'INVALIDATE' ? 2 : $json.sync_action === 'NOOP' ? 3 : $json.sync_action === 'ERROR' ? 4 : -1 }}",
+        "looseTypeValidation": true
+      },
+      "id": "n8n-voc03-route",
+      "name": "Route Sync Action v1.0",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        528,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Report CREATE v1.0\n//\n// Dry Run 阶段：\n// 本节点只输出该分支的计划明细，不做任何飞书写入。\n//\n// 后续接真写节点时，应把本节点替换为：\n// Prepare CREATE Payload + HTTP Request（部分更新，按字段白名单）\n// ============================================================\n\n// 本分支收到的行\nconst rows = $input.all().map(item => item.json);\n\n// 全量计划（便于在每个分支上都看到完整分布）\nconst allPlans =\n  $('Plan Feishu Risk Sync v1.0')\n    .all()\n    .map(item => item.json);\n\nconst ACTION = 'CREATE';\n\nconst filtered = rows.filter(row => row.sync_action === ACTION);\n\nfunction summarize(plans) {\n\n  const counts = {\n    CREATE: 0,\n    UPDATE: 0,\n    INVALIDATE: 0,\n    NOOP: 0,\n    ERROR: 0\n  };\n\n  for (const row of plans) {\n    if (counts[row.sync_action] !== undefined) {\n      counts[row.sync_action] += 1;\n    }\n  }\n\n  return counts;\n}\n\nreturn [\n  {\n    json: {\n      branch: ACTION,\n      dry_run: true,\n      write_disabled: true,\n      row_count: filtered.length,\n      summary_all_actions: summarize(allPlans),\n      rows: filtered\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-report-create",
+      "name": "Report CREATE v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Report UPDATE v1.0\n//\n// Dry Run 阶段：\n// 本节点只输出该分支的计划明细，不做任何飞书写入。\n//\n// 后续接真写节点时，应把本节点替换为：\n// Prepare UPDATE Payload + HTTP Request（部分更新，按字段白名单）\n// ============================================================\n\n// 本分支收到的行\nconst rows = $input.all().map(item => item.json);\n\n// 全量计划（便于在每个分支上都看到完整分布）\nconst allPlans =\n  $('Plan Feishu Risk Sync v1.0')\n    .all()\n    .map(item => item.json);\n\nconst ACTION = 'UPDATE';\n\nconst filtered = rows.filter(row => row.sync_action === ACTION);\n\nfunction summarize(plans) {\n\n  const counts = {\n    CREATE: 0,\n    UPDATE: 0,\n    INVALIDATE: 0,\n    NOOP: 0,\n    ERROR: 0\n  };\n\n  for (const row of plans) {\n    if (counts[row.sync_action] !== undefined) {\n      counts[row.sync_action] += 1;\n    }\n  }\n\n  return counts;\n}\n\nreturn [\n  {\n    json: {\n      branch: ACTION,\n      dry_run: true,\n      write_disabled: true,\n      row_count: filtered.length,\n      summary_all_actions: summarize(allPlans),\n      rows: filtered\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-report-update",
+      "name": "Report UPDATE v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Report INVALIDATE v1.0\n//\n// Dry Run 阶段：\n// 本节点只输出该分支的计划明细，不做任何飞书写入。\n//\n// 后续接真写节点时，应把本节点替换为：\n// Prepare INVALIDATE Payload + HTTP Request（部分更新，按字段白名单）\n// ============================================================\n\n// 本分支收到的行\nconst rows = $input.all().map(item => item.json);\n\n// 全量计划（便于在每个分支上都看到完整分布）\nconst allPlans =\n  $('Plan Feishu Risk Sync v1.0')\n    .all()\n    .map(item => item.json);\n\nconst ACTION = 'INVALIDATE';\n\nconst filtered = rows.filter(row => row.sync_action === ACTION);\n\nfunction summarize(plans) {\n\n  const counts = {\n    CREATE: 0,\n    UPDATE: 0,\n    INVALIDATE: 0,\n    NOOP: 0,\n    ERROR: 0\n  };\n\n  for (const row of plans) {\n    if (counts[row.sync_action] !== undefined) {\n      counts[row.sync_action] += 1;\n    }\n  }\n\n  return counts;\n}\n\nreturn [\n  {\n    json: {\n      branch: ACTION,\n      dry_run: true,\n      write_disabled: true,\n      row_count: filtered.length,\n      summary_all_actions: summarize(allPlans),\n      rows: filtered\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-report-invalidate",
+      "name": "Report INVALIDATE v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Report NOOP v1.0\n//\n// Dry Run 阶段：\n// 本节点只输出该分支的计划明细，不做任何飞书写入。\n//\n// 后续接真写节点时，应把本节点替换为：\n// Prepare NOOP Payload + HTTP Request（部分更新，按字段白名单）\n// ============================================================\n\n// 本分支收到的行\nconst rows = $input.all().map(item => item.json);\n\n// 全量计划（便于在每个分支上都看到完整分布）\nconst allPlans =\n  $('Plan Feishu Risk Sync v1.0')\n    .all()\n    .map(item => item.json);\n\nconst ACTION = 'NOOP';\n\nconst filtered = rows.filter(row => row.sync_action === ACTION);\n\nfunction summarize(plans) {\n\n  const counts = {\n    CREATE: 0,\n    UPDATE: 0,\n    INVALIDATE: 0,\n    NOOP: 0,\n    ERROR: 0\n  };\n\n  for (const row of plans) {\n    if (counts[row.sync_action] !== undefined) {\n      counts[row.sync_action] += 1;\n    }\n  }\n\n  return counts;\n}\n\nreturn [\n  {\n    json: {\n      branch: ACTION,\n      dry_run: true,\n      write_disabled: true,\n      row_count: filtered.length,\n      summary_all_actions: summarize(allPlans),\n      rows: filtered\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-report-noop",
+      "name": "Report NOOP v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        608
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// Report ERROR v1.0\n//\n// Dry Run 阶段：\n// 本节点只输出该分支的计划明细，不做任何飞书写入。\n//\n// 后续接真写节点时，应把本节点替换为：\n// Prepare ERROR Payload + HTTP Request（部分更新，按字段白名单）\n// ============================================================\n\n// 本分支收到的行\nconst rows = $input.all().map(item => item.json);\n\n// 全量计划（便于在每个分支上都看到完整分布）\nconst allPlans =\n  $('Plan Feishu Risk Sync v1.0')\n    .all()\n    .map(item => item.json);\n\nconst ACTION = 'ERROR';\n\nconst filtered = rows.filter(row => row.sync_action === ACTION);\n\nfunction summarize(plans) {\n\n  const counts = {\n    CREATE: 0,\n    UPDATE: 0,\n    INVALIDATE: 0,\n    NOOP: 0,\n    ERROR: 0\n  };\n\n  for (const row of plans) {\n    if (counts[row.sync_action] !== undefined) {\n      counts[row.sync_action] += 1;\n    }\n  }\n\n  return counts;\n}\n\nreturn [\n  {\n    json: {\n      branch: ACTION,\n      dry_run: true,\n      write_disabled: true,\n      row_count: filtered.length,\n      summary_all_actions: summarize(allPlans),\n      rows: filtered\n    }\n  }\n];\n"
+      },
+      "id": "n8n-voc03-report-error",
+      "name": "Report ERROR v1.0",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        -272
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map((item) => {\n  const p = item.json;\n\n  // 1. 基础保护：这里只允许 CREATE\n  if (p.sync_action !== 'CREATE') {\n    throw new Error(\n      `CREATE_VALIDATION_ERROR: sync_action=${p.sync_action}, content_key=${p.content_key}`\n    );\n  }\n\n  // 2. 风险等级只允许 P0 / P1\n  const riskLevel = p.new_risk_level ?? p.final_risk_level;\n\n  if (!['P0', 'P1'].includes(riskLevel)) {\n    throw new Error(\n      `CREATE_VALIDATION_ERROR: invalid risk level=${riskLevel}, content_key=${p.content_key}`\n    );\n  }\n\n  // 3. 必填字段校验\n  const required = {\n    content_key: p.content_key,\n    alert_key: p.alert_key,\n    analysis_id: p.analysis_id,\n    risk_level: riskLevel,\n    risk_summary: p.risk_summary ?? p.final_summary,\n    platform: p.platform,\n    shop_name: p.shop_name,\n    source_review_id: p.source_review_id,\n  };\n\n  const missing = Object.entries(required)\n    .filter(([_, value]) =>\n      value === null ||\n      value === undefined ||\n      value === ''\n    )\n    .map(([key]) => key);\n\n  if (missing.length > 0) {\n    throw new Error(\n      `CREATE_VALIDATION_ERROR: missing=${missing.join(',')}, content_key=${p.content_key}`\n    );\n  }\n\n  const now = Date.now();\n\n  // 4. 飞书字段\n  const fields = {\n    '风险等级': riskLevel,\n    '处理状态': '待处理',\n\n    '风险摘要': p.risk_summary ?? p.final_summary ?? '',\n    '原始评价': p.content_text ?? '',\n\n    '风险类别':\n      p.final_category ??\n      p.risk_category ??\n      p.category ??\n      '',\n\n    '风险子类':\n      p.final_subcategory ??\n      p.risk_subcategory ??\n      p.subcategory ??\n      '',\n\n    '商品名称': p.product_name ?? '',\n    'SKU名称': p.sku_name ?? '',\n\n    '平台': p.platform,\n    '店铺': p.shop_name,\n\n    '评价时间': p.content_time_feishu,\n    '评价ID': p.source_review_id,\n\n    'alert_key': p.alert_key,\n    'content_key': p.content_key,\n    'analysis_id': p.analysis_id,\n\n    '商品ID': p.product_id ?? '',\n    'SKU_ID': p.sku_id ?? '',\n\n    '首次同步时间': now,\n    '最近同步时间': now,\n  };\n\n  // 5. 商品评分为空时不要写 0\n  if (\n    p.product_rating !== null &&\n    p.product_rating !== undefined &&\n    p.product_rating !== ''\n  ) {\n    fields['商品评分'] = Number(p.product_rating);\n  }\n\n  // 6. 当前 Demo 没有真实商品链接，所以直接不传该字段\n  // 不写负责人、不写处理备注，让它们保持为空。\n\n  return {\n    json: {\n      ...p,\n\n      create_validation_status: 'PASS',\n\n      // 后续 HTTP Request 直接使用这里\n      feishu_body: {\n        fields\n      }\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        80
+      ],
+      "id": "b5ff76e2-3027-4348-9385-3c6790a235ee",
+      "name": "Prepare CREATE Payload v1.0"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://open.feishu.cn/open-apis/bitable/v1/apps/Q4m0bL0ltaipFZssHhwctC7UnJd/tables/tbliyndQlid5p5vy/records",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Feishu Access Token v1.0').first().json.tenant_access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.feishu_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1024,
+        80
+      ],
+      "id": "47581a20-55ca-45c2-9b34-fb31496d6ea8",
+      "name": "Create Feishu Risk Record v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const p = $json;\n\nconst fields = {};\n\n// 只写 Planner 明确允许更新的字段。\n// 负责人 / 处理备注 / 首次同步时间绝不写入。\nconst allowed = new Set(\n  Array.isArray(p.system_fields_to_write)\n    ? p.system_fields_to_write\n    : []\n);\n\nfunction setIfAllowed(fieldName, value) {\n  if (!allowed.has(fieldName)) return;\n\n  // 对于当前没有真实来源的数据，不用空值覆盖飞书已有值\n  if (value === undefined || value === null) return;\n\n  fields[fieldName] = value;\n}\n\n\n// ==============================\n// 风险字段\n// ==============================\n\nsetIfAllowed('风险等级', p.new_risk_level);\nsetIfAllowed('风险摘要', p.risk_summary);\nsetIfAllowed('原始评价', p.content_text);\nsetIfAllowed('风险类别', p.risk_category);\nsetIfAllowed('风险子类', p.risk_subcategory);\n\n\n// ==============================\n// 商品 / 评价字段\n// ==============================\n\nsetIfAllowed('商品名称', p.product_name);\n\n// Demo 当前没有真实商品链接。\n// 不写空字符串，避免未来覆盖真实 URL。\n// 所以这里暂时不 set 商品链接。\n\nsetIfAllowed('SKU名称', p.sku_name);\n\nif (\n  allowed.has('商品评分') &&\n  p.product_rating !== null &&\n  p.product_rating !== undefined\n) {\n  fields['商品评分'] = Number(p.product_rating);\n}\n\nsetIfAllowed('平台', p.platform);\nsetIfAllowed('店铺', p.shop_name);\n\nif (\n  allowed.has('评价时间') &&\n  p.content_time_feishu !== null &&\n  p.content_time_feishu !== undefined\n) {\n  fields['评价时间'] = Number(p.content_time_feishu);\n}\n\nsetIfAllowed('评价ID', p.source_review_id);\n\n\n// ==============================\n// 系统身份字段\n// ==============================\n\nsetIfAllowed('alert_key', p.alert_key);\nsetIfAllowed('content_key', p.content_key);\n\nif (\n  allowed.has('analysis_id') &&\n  p.analysis_id !== null &&\n  p.analysis_id !== undefined\n) {\n  fields['analysis_id'] = Number(p.analysis_id);\n}\n\nsetIfAllowed('商品ID', p.product_id);\nsetIfAllowed('SKU_ID', p.sku_id);\n\n\n// ==============================\n// 状态\n// 只有 Planner 明确要求时才更新\n// ==============================\n\nif (\n  allowed.has('处理状态') &&\n  p.target_processing_status\n) {\n  fields['处理状态'] = p.target_processing_status;\n}\n\n\n// ==============================\n// 最近同步时间\n// ==============================\n\nif (allowed.has('最近同步时间')) {\n  fields['最近同步时间'] = p.sync_planned_at\n    ? new Date(p.sync_planned_at).getTime()\n    : Date.now();\n}\n\n\n// ==============================\n// 输出\n// ==============================\n\nreturn {\n  json: {\n    content_key: p.content_key,\n    alert_key: p.alert_key,\n\n    analysis_id: p.analysis_id,\n\n    feishu_record_id: p.feishu_record_id,\n\n    sync_action: p.sync_action,\n    preserve_human_fields: true,\n\n    fields,\n\n    feishu_body: {\n      fields\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        256
+      ],
+      "id": "881a573e-648f-4c5c-a106-34222bf297e8",
+      "name": "Prepare UPDATE Payload v1.0"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://open.feishu.cn/open-apis/bitable/v1/apps/Q4m0bL0ltaipFZssHhwctC7UnJd/tables/tbliyndQlid5p5vy/records/' + $json.feishu_record_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Feishu Access Token v1.0').first().json.tenant_access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.feishu_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1024,
+        256
+      ],
+      "id": "d8267f04-feb6-4fa5-9808-51cb01970aed",
+      "name": "Update Feishu Risk Record v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const p = $json;\n\nif (p.sync_action !== 'INVALIDATE') {\n  throw new Error(\n    `INVALIDATE_VALIDATION_ERROR: sync_action=${p.sync_action}, content_key=${p.content_key}`\n  );\n}\n\nif (!p.feishu_record_id) {\n  throw new Error(\n    `INVALIDATE_VALIDATION_ERROR: missing feishu_record_id, content_key=${p.content_key}`\n  );\n}\n\nif (!p.analysis_id) {\n  throw new Error(\n    `INVALIDATE_VALIDATION_ERROR: missing analysis_id, content_key=${p.content_key}`\n  );\n}\n\nconst fields = {\n  '处理状态': '已失效',\n  'analysis_id': Number(p.analysis_id),\n  '最近同步时间': p.sync_planned_at\n    ? new Date(p.sync_planned_at).getTime()\n    : Date.now()\n};\n\nreturn {\n  json: {\n    content_key: p.content_key,\n    alert_key: p.alert_key,\n    analysis_id: p.analysis_id,\n    feishu_record_id: p.feishu_record_id,\n\n    old_risk_level: p.old_risk_level,\n    old_processing_status: p.old_processing_status,\n    target_processing_status: '已失效',\n\n    preserve_human_fields: true,\n\n    fields,\n\n    feishu_body: {\n      fields\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        448
+      ],
+      "id": "dab861cd-c3c0-497c-92a0-25eafd10b5eb",
+      "name": "Prepare INVALIDATE Payload v1.0"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ 'https://open.feishu.cn/open-apis/bitable/v1/apps/Q4m0bL0ltaipFZssHhwctC7UnJd/tables/tbliyndQlid5p5vy/records/' + $json.feishu_record_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Get Feishu Access Token v1.0').first().json.tenant_access_token }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.feishu_body }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1024,
+        448
+      ],
+      "id": "976f25f2-d0da-4fc6-909a-c36f1d73eb66",
+      "name": "Invalidate Feishu Risk Record v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all();\n\nreturn [\n  {\n    json: {\n      control: true,\n      snapshot_row_count: rows.length\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -592,
+        304
+      ],
+      "id": "d70348fa-2980-4265-b875-608547aba0b7",
+      "name": "Collapse Snapshot to Control v1.0"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const r = $json;\n\nconst code = Number(r.code);\n\n// 1. 飞书业务错误\nif (code !== 0) {\n  const msg = r.msg ?? 'UNKNOWN_FEISHU_ERROR';\n  const logId =\n    r.error?.log_id ??\n    r.error?.logId ??\n    '';\n\n  throw new Error(\n    `FEISHU_WRITE_FAILED: code=${r.code}, msg=${msg}, log_id=${logId}`\n  );\n}\n\n// 2. 成功响应必须有 record_id\nconst recordId =\n  r.data?.record?.record_id ??\n  r.data?.record?.id ??\n  null;\n\nif (!recordId) {\n  throw new Error(\n    `FEISHU_WRITE_FAILED: code=0 but record_id missing`\n  );\n}\n\n// 3. 输出标准化成功结果\nreturn {\n  json: {\n    feishu_write_status: 'SUCCESS',\n    feishu_code: code,\n    feishu_msg: r.msg ?? 'success',\n    feishu_record_id: recordId,\n\n    // 保留原始响应，方便调试\n    feishu_response: r\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        272
+      ],
+      "id": "21a2fb7c-e679-4bb1-aff8-57e4a4363736",
+      "name": "Validate Feishu Write Response v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(item => item.json);\n\nif (items.length === 0) {\n  return [];\n}\n\nconst details = items\n  .slice(0, 5)\n  .map((r, index) => {\n    return [\n      `#${index + 1}`,\n      `error_code=${r.error_code ?? 'UNKNOWN'}`,\n      `content_key=${r.content_key ?? 'UNKNOWN'}`,\n      `reason=${r.sync_reason ?? 'UNKNOWN'}`\n    ].join(', ');\n  })\n  .join(' | ');\n\nthrow new Error(\n  `FEISHU_RISK_SYNC_PLANNING_FAILED: ` +\n  `error_count=${items.length}; ${details}`\n);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        784,
+        784
+      ],
+      "id": "3e0a5cf4-cefc-4608-92ec-d64242206826",
+      "name": "Fail on Planned Sync Error v1.0"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(item => item.json);\n\nconst records = items.map(r => {\n  const fields =\n    r.feishu_response?.data?.record?.fields ?? {};\n\n  return {\n    content_key: fields.content_key ?? null,\n    alert_key: fields.alert_key ?? null,\n    analysis_id: fields.analysis_id ?? null,\n\n    feishu_record_id:\n      r.feishu_record_id ??\n      r.feishu_response?.data?.record?.record_id ??\n      null,\n\n    risk_level: fields['风险等级'] ?? null,\n    processing_status: fields['处理状态'] ?? null,\n\n    write_status: r.feishu_write_status ?? 'SUCCESS'\n  };\n});\n\nreturn [\n  {\n    json: {\n      sync_result: 'WRITE_SUCCESS',\n      write_count: records.length,\n      failed_count: 0,\n      records\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1648,
+        272
+      ],
+      "id": "755d2884-cc42-4c58-8830-2d21f373dfa4",
+      "name": "Report Feishu Write Success v1.0"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1024,
+        512
+      ],
+      "id": "705ed696-3d7a-42e2-adb3-94900a177e45",
+      "name": "Called by Orchestrator v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Read Current Analysis Snapshot - PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Current Analysis Snapshot - PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Collapse Snapshot to Control v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Feishu Access Token v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read Existing Risk Workbench v2 v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Existing Risk Workbench v2 v1.0": {
+      "main": [
+        [
+          {
+            "node": "Normalize Existing Feishu Records v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Existing Feishu Records v1.0": {
+      "main": [
+        [
+          {
+            "node": "Plan Feishu Risk Sync v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Feishu Risk Sync v1.0": {
+      "main": [
+        [
+          {
+            "node": "Route Sync Action v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Sync Action v1.0": {
+      "main": [
+        [
+          {
+            "node": "Prepare CREATE Payload v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare UPDATE Payload v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare INVALIDATE Payload v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Report NOOP v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fail on Planned Sync Error v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare CREATE Payload v1.0": {
+      "main": [
+        [
+          {
+            "node": "Create Feishu Risk Record v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare UPDATE Payload v1.0": {
+      "main": [
+        [
+          {
+            "node": "Update Feishu Risk Record v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare INVALIDATE Payload v1.0": {
+      "main": [
+        [
+          {
+            "node": "Invalidate Feishu Risk Record v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collapse Snapshot to Control v1.0": {
+      "main": [
+        [
+          {
+            "node": "Get Feishu Access Token v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Feishu Write Response v1.0": {
+      "main": [
+        [
+          {
+            "node": "Report Feishu Write Success v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Feishu Risk Record v1.0": {
+      "main": [
+        [
+          {
+            "node": "Validate Feishu Write Response v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Feishu Risk Record v1.0": {
+      "main": [
+        [
+          {
+            "node": "Validate Feishu Write Response v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invalidate Feishu Risk Record v1.0": {
+      "main": [
+        [
+          {
+            "node": "Validate Feishu Write Response v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Called by Orchestrator v1.0": {
+      "main": [
+        [
+          {
+            "node": "Read Current Analysis Snapshot - PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataErrorExecution": "all",
+    "saveExecutionProgress": true
+  },
+  "versionId": "937c38fa-2677-4a46-9da2-0821d7c4f14f",
+  "meta": {
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "VOC03RISKSYNC000",
+  "tags": []
+}

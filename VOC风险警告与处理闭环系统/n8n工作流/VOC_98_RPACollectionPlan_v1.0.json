@@ -1,0 +1,113 @@
+{
+  "name": "VOC_98_RPACollectionPlan_v1.0",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "voc/rpa/collection-plan",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "88d064f4-2cb8-4562-b7b8-0489c7ad156e",
+      "name": "RPA Request Collection Plan v1.0",
+      "webhookId": "ef6d08a1-7f63-4ed9-9cc7-f3ef45ed8a9c"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first()?.json ?? {};\n\n// Webhook 调用时参数在 body；手动测试时也兼容直接传入\nconst payload =\n  input.body && typeof input.body === 'object'\n    ? input.body\n    : input;\n\nconst timezone = 'Asia/Shanghai';\n\n// ---------- 基础配置 ----------\nconst sourceName =\n  payload.source_name || 'QIANNU_MOCK';\n\nconst sourcePlatform =\n  payload.source_platform || '淘宝/天猫';\n\nconst queryShopName =\n  payload.query_shop_name || null;\n\nconst collectionScope =\n  payload.collection_scope || 'INCREMENTAL';\n\n// ---------- 获取北京时间 ----------\nconst now = new Date();\n\nconst parts = Object.fromEntries(\n  new Intl.DateTimeFormat('en-US', {\n    timeZone: timezone,\n    year: 'numeric',\n    month: '2-digit',\n    day: '2-digit',\n    hour: '2-digit',\n    minute: '2-digit',\n    hourCycle: 'h23'\n  })\n    .formatToParts(now)\n    .filter(p => p.type !== 'literal')\n    .map(p => [p.type, p.value])\n);\n\nconst year = Number(parts.year);\nconst month = Number(parts.month);\nconst day = Number(parts.day);\nconst hour = Number(parts.hour);\n\n// 用 UTC 只做“年月日加减”，避免本机时区干扰\nfunction formatDateUTC(date) {\n  return date.toISOString().slice(0, 10);\n}\n\nconst todayDate = new Date(Date.UTC(year, month - 1, day));\nconst yesterdayDate = new Date(todayDate.getTime() - 24 * 60 * 60 * 1000);\n\nconst today = formatDateUTC(todayDate);\nconst yesterday = formatDateUTC(yesterdayDate);\n\n// ---------- 判断采集轮次 ----------\n// 正式调用时优先由影刀明确传 MORNING / AFTERNOON\n// 没传时，方便手动测试：北京时间 12 点前视为上午轮\nlet runSlot = String(\n  payload.run_slot || (hour < 12 ? 'MORNING' : 'AFTERNOON')\n).toUpperCase();\n\nif (!['MORNING', 'AFTERNOON'].includes(runSlot)) {\n  throw new Error(`非法 run_slot: ${runSlot}`);\n}\n\n// ---------- 生成日期查询区间 ----------\nlet queryStartDate;\nlet queryEndDate = today;\n\nif (runSlot === 'MORNING') {\n  // 08:30：昨天 ～ 今天\n  queryStartDate = yesterday;\n} else {\n  // 14:30：今天 ～ 今天\n  queryStartDate = today;\n}\n\nreturn [\n  {\n    json: {\n      status: 'READY',\n      source_name: sourceName,\n      source_platform: sourcePlatform,\n      query_shop_name: queryShopName,\n      collection_scope: collectionScope,\n\n      timezone,\n      run_slot: runSlot,\n\n      query_start_date: queryStartDate,\n      query_end_date: queryEndDate\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "440ab862-0977-46e6-9a6a-77d4aa0d25d0",
+      "name": "Build Collection Plan Config v1.0"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH params AS (\n    SELECT\n        $1::varchar AS source_name,\n        $2::varchar AS source_platform,\n        NULLIF($3::varchar, '') AS query_shop_name,\n        $4::varchar AS collection_scope,\n        $5::timestamptz AS requested_end_ts,\n        $6::integer AS overlap_minutes\n),\n\nlast_watermark AS (\n    SELECT\n        MAX(cr.query_end_ts) AS watermark\n    FROM voc.collector_runs cr\n    CROSS JOIN params p\n    WHERE cr.status = 'SUCCESS'\n      AND cr.query_end_ts IS NOT NULL\n      AND cr.collection_scope = 'INCREMENTAL'\n      AND cr.source_name = p.source_name\n      AND cr.source_platform = p.source_platform\n      AND COALESCE(cr.query_shop_name, '__ALL__')\n          =\n          COALESCE(p.query_shop_name, '__ALL__')\n)\n\nSELECT\n    p.source_name,\n    p.source_platform,\n    p.query_shop_name,\n    p.collection_scope,\n\n    lw.watermark AS previous_watermark,\n\n    CASE\n        WHEN lw.watermark IS NULL\n        THEN date_trunc(\n            'day',\n            p.requested_end_ts AT TIME ZONE 'Asia/Shanghai'\n        ) AT TIME ZONE 'Asia/Shanghai'\n\n        ELSE\n            lw.watermark\n            - make_interval(mins => p.overlap_minutes)\n    END AS query_start_ts,\n\n    p.requested_end_ts AS query_end_ts,\n\n    p.overlap_minutes,\n\n    CASE\n        WHEN lw.watermark IS NULL\n        THEN 'FIRST_RUN_TODAY_00'\n        ELSE 'WATERMARK_WITH_OVERLAP'\n    END AS window_reason\n\nFROM params p\nCROSS JOIN last_watermark lw;",
+        "options": {
+          "queryReplacement": "={{ [   $json.source_name,   $json.source_platform,   $json.query_shop_name ?? '',   $json.collection_scope,   $json.requested_end_ts,   $json.overlap_minutes ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        464,
+        -400
+      ],
+      "id": "63ec1896-732c-4a1e-a0b2-4b5e61e66abb",
+      "name": "Resolve Collection Window v1.0",
+      "credentials": {
+        "postgres": {
+          "id": "F4mdxlUYz0WinUyc",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json;\n\nreturn [\n  {\n    json: {\n      status: row.status ?? 'READY',\n\n      source_name: row.source_name,\n      source_platform: row.source_platform,\n      query_shop_name: row.query_shop_name ?? null,\n      collection_scope: row.collection_scope,\n\n      timezone: row.timezone ?? 'Asia/Shanghai',\n      run_slot: row.run_slot,\n\n      query_start_date: row.query_start_date,\n      query_end_date: row.query_end_date\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ],
+      "id": "6733b37b-f887-4995-b208-e5b80a42ba2a",
+      "name": "Build RPA Collection Plan Response v1.0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "RPA Request Collection Plan v1.0": {
+      "main": [
+        [
+          {
+            "node": "Build Collection Plan Config v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Collection Plan Config v1.0": {
+      "main": [
+        [
+          {
+            "node": "Build RPA Collection Plan Response v1.0",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Collection Window v1.0": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "413cb624-0946-429b-83b7-e4ee962bbcc9",
+  "meta": {
+    "instanceId": "978d9a6e78d16f3931b045287b5c9d7677e652f7ee535eff32feafc99777f8bf"
+  },
+  "nodeGroups": [],
+  "id": "89IBfVzaNZwYAM9x",
+  "tags": []
+}
