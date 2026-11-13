@@ -3,6 +3,9 @@
 ### 基于 RPA + PostgreSQL + n8n + Dify + 飞书多维表的电商业务自动化实践
 
 ***
+## 演示视频
+[点击观看完整演示视频](https://github.com/qianelle/personal-demos/issues/1#issue-6367748038)
+
 
 # 01｜项目概览
 
@@ -241,7 +244,7 @@
 
 ## 本项目为个人 Demo，使用模拟业务数据，已完成端到端流程验证，尚未经过真实生产环境验证。
 
-点击链接看完整[<u>演示视频</u>](https://b23.tv/l7CYhJr)​
+点击链接看完整[<u>演示视频</u>](https://b23.tv/l7CYhJr)​；(https://github.com/qianelle/personal-demos/issues/1#issue-6367748038)
 
 ![](attachment/11.webp)
 
