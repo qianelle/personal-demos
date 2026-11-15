@@ -1,0 +1,122 @@
+{# ── 页面骨架 ── #}
+{# 作用：提供侧边栏、页头、内容区、页脚、链接池弹窗与公共脚本。 #}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ browser_title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?t=20261111d">
+</head>
+<body data-range="{{ filters.short_range }}">
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-mark">报</div>
+    <div class="brand-text">
+      <div class="brand-title">{{ project_name }}</div>
+      <div class="brand-sub">{{ brand_subtitle }}</div>
+    </div>
+  </div>
+  <nav class="nav">
+    {% for item in nav %}
+    <a class="nav-item {% if item.active %}active{% endif %}" href="{{ item.href }}">{{ item.title }}</a>
+    {% if item.key == 'analysis' %}
+    <button type="button" class="pool-trigger" id="openPool">
+      <span>设置我的链接池</span><small>{{ my_links_count }} 条</small>
+    </button>
+    {% endif %}
+    {% endfor %}
+  </nav>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="topbar-title">
+      <div class="system-kicker">{{ project_name }}</div>
+      <h1>{{ page.title }}</h1>
+      {% if page.subtitle %}<div class="subtitle">{{ page.subtitle }}</div>{% endif %}
+    </div>
+    <div class="topbar-actions">
+      <span class="snapshot">{{ snapshot_note }}</span>
+    </div>
+  </header>
+
+  <div class="range-banner">
+    <span class="range-main">{{ top_range }}</span>
+    {% if date_switched %}
+    <span class="updated-badge">已更新</span>
+    <span class="range-switched">已切到 {{ filters.short_range }}｜上期 {{ filters.compare_label }}</span>
+    {% endif %}
+  </div>
+
+  {% if pool_notice.open %}
+  <div class="notice-card success pool-notice">
+    链接池已更新：成功 {{ pool_notice.ok }} 条 / 未找到 {{ pool_notice.missing }} 条
+    {% if pool_notice.missing_ids %}（{{ pool_notice.missing_ids|join('、') }}）{% endif %}。
+  </div>
+  {% endif %}
+
+  <section class="content">
+{# 页面区块：输出当前页面的主体内容。 #}
+    {% block content %}{% endblock %}
+  </section>
+
+  <footer class="footer">{{ footer_note }}</footer>
+</main>
+
+<dialog id="poolDialog" class="modal-dialog">
+  <form method="post" action="/links/my-links">
+    <input type="hidden" name="next" value="{{ request.full_path }}">
+    <div class="modal-head"><h2>设置我的链接池</h2>
+      <button type="button" class="modal-close" id="closePool">关闭</button></div>
+    <textarea name="item_ids" rows="13" class="modal-textarea" id="poolTextarea"
+              placeholder="每行一个商品ID，也支持逗号/中文逗号/空格">{{ my_links_ids_text }}</textarea>
+    <div class="modal-modes">
+      <button type="button" class="btn" id="loadAllPool">载入本店全部链接</button>
+      <span class="muted">保存后四个模块同步生效</span>
+    </div>
+    <div class="modal-actions">
+      <button type="submit" class="btn btn-primary">保存链接池</button>
+      <button type="button" class="btn btn-ghost" id="cancelPool">取消</button>
+    </div>
+  </form>
+</dialog>
+
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script src="{{ url_for('static', filename='vendor/echarts.min.js') }}"></script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script src="{{ url_for('static', filename='js/tips.js') }}"></script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script>
+  window.CHART_DATA = {{ chart_data|tojson }};
+  window.CHART_LAYOUT = {{ chart_layout|tojson }};
+  window.TREND_OPTIONS = {{ (page.trend_options or {})|tojson }};
+  window.ALL_ON_SALE_IDS = {{ all_on_sale_ids_json|tojson }};
+  EcomApp.initCharts();
+</script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script src="{{ url_for('static', filename='js/kpi.js') }}"></script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script src="{{ url_for('static', filename='js/table-tools.js') }}?t=20261111d"></script>
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script>
+{# 页面脚本入口：初始化页面交互。 #}
+(function () {
+  var dlg = document.getElementById('poolDialog');
+  var open = document.getElementById('openPool');
+  if (!dlg || !open) { return; }
+  open.addEventListener('click', function () { dlg.showModal(); });
+  document.getElementById('closePool').addEventListener('click', function () { dlg.close(); });
+  document.getElementById('cancelPool').addEventListener('click', function () { dlg.close(); });
+  document.getElementById('loadAllPool').addEventListener('click', function () {
+    document.getElementById('poolTextarea').value = (window.ALL_ON_SALE_IDS || []).join('\\n');
+  });
+  {% if pool_notice.open %}dlg.showModal();{% endif %}
+})();
+</script>
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block scripts %}{% endblock %}
+</body>
+</html>

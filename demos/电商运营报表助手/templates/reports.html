@@ -1,0 +1,149 @@
+{# ── 数据报表页 ── #}
+{# 作用：展示日报、周报、月报、目标设置和导出入口。 #}
+{% extends "base.html" %}
+{% import "_info.html" as info %}
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block content %}
+
+<div class="report-toolbar">
+  <div class="report-tabs-row">
+    <div class="tabs report-tabs">
+      {% for tab in page.tabs %}
+      <a class="tab {% if tab.active %}active{% endif %}" href="{{ tab.url }}">{{ tab.label }}</a>
+      {% endfor %}
+    </div>
+    <button type="button" class="goal-tab-btn" id="openGoals">目标设置</button>
+  </div>
+</div>
+
+<section class="card">
+  <div class="card-head"><h2>关键指标｜{{ page.range_label }}</h2></div>
+  <div class="report-kpi-row">
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">销售额</div><div class="kpi-compact-value">{{ page.sections.kpis.sales|fmtv('money') }}</div><div class="kpi-unit">元</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">净销售额</div><div class="kpi-compact-value">{{ page.sections.kpis.net_sales|fmtv('money') }}</div><div class="kpi-unit">元</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">销量</div><div class="kpi-compact-value">{{ page.sections.kpis.units|fmtv('int') }}</div><div class="kpi-unit">件</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">访客数</div><div class="kpi-compact-value">{{ page.sections.kpis.visitors|fmtv('int') }}</div><div class="kpi-unit">人</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">转化率</div><div class="kpi-compact-value">{{ page.sections.kpis.conversion_rate|fmtv('pct') }}</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">退款率</div><div class="kpi-compact-value">{{ page.sections.kpis.refund_rate|fmtv('pct') }}</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">推广花费</div><div class="kpi-compact-value">{{ page.sections.kpis.ad_cost|fmtv('money') }}</div><div class="kpi-unit">元</div></div>
+    <div class="kpi-compact report-kpi"><div class="kpi-compact-label">付费占比</div><div class="kpi-compact-value">{{ page.sections.kpis.ad_spend_ratio|fmtv('pct') }}</div></div>
+  </div>
+</section>
+
+{% set monthly = page.targets.monthly %}
+{% set paid = page.targets.paid %}
+<section class="card target-board">
+  <div class="card-head"><h2>目标达成看板｜{{ page.range_label }}
+    {{ info.info(page.info.target_empty ~ ' ' ~ page.info.paid_formula) }}</h2></div>
+  <div class="dash-grid">
+    <div class="dash-block">
+      <div class="dash-title">本月目标达成</div>
+      <div class="chart" id="chart_{{ 'daily' if page.tab == 'daily' else 'week' if page.tab == 'weekly' else 'month' }}_gauge"
+           style="height: 260px;"></div>
+      <div class="dash-caption">本月累计净销售额 {{ monthly.actual|fmtv('money') }} 元 / 目标
+        {{ monthly.target_wan if monthly.target_wan is not none else '未设置' }}{% if monthly.target_wan is not none %} 万元{% endif %}
+        · 时间进度 {{ (monthly.time_progress * 100)|fmtv('num1') }}%
+        （{{ monthly.elapsed_days }}/{{ monthly.month_days }} 天）
+      </div>
+    </div>
+    <div class="dash-block {% if paid.ok is false %}warn{% endif %}">
+      <div class="dash-title">当前付费占比</div>
+      <div class="dash-big">{{ paid.actual|fmtv('pct') }}</div>
+      <div class="gauge"><div class="gauge-bar {% if paid.ok is false %}over{% endif %}"
+        style="width: {{ paid.gauge_pct }}%"></div></div>
+      <div class="dash-caption">上限 {{ paid.limit_pct if paid.limit_pct is not none else '未设置' }}{% if paid.limit_pct is not none %}%{% endif %}
+        · <span class="{{ 'text-warn' if paid.ok is false else '' }}">{{ paid.note }}</span></div>
+    </div>
+    <div class="dash-block scene-block">
+      <div class="dash-title">推广场景花费占比
+        {{ info.info('按当前报表页签区间与链接池过滤，三个一级场景的 SUM(花费) 合计相除；三场景合计等于本页推广花费。') }}</div>
+      <div class="scene-stack">
+        {% for item in page.targets.scene.rows %}
+        <span style="width: {{ item.ratio }}%; background: {{ page.targets.scene.colors[loop.index0] }};"
+              title="{{ item.scene }} {{ item.ratio }}%"></span>
+        {% endfor %}
+      </div>
+      <div class="scene-rows">
+        {% for item in page.targets.scene.rows %}
+        <div class="scene-row">
+          <span class="scene-name"><i style="background: {{ page.targets.scene.colors[loop.index0] }};"></i>{{ item.scene }}</span>
+          <span class="scene-cost">{{ item.cost|fmtv('money') }} 元</span>
+          <span class="scene-ratio">{{ item.ratio|fmtv('num') }}%</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="scene-total">合计花费 {{ page.targets.scene.total|fmtv('money') }} 元</div>
+    </div>
+  </div>
+</section>
+
+<section class="card chart-card">
+  <div class="card-head"><h2>
+    {% if page.tab == 'daily' %}近 7 个自然日 · 净销售额与付费占比
+    {% elif page.tab == 'weekly' %}近 8 个自然周 · 净销售额与付费占比
+    {% else %}近 12 个自然月 · 净销售额与付费占比{% endif %}
+    ｜{{ page.chart_range_label }}</h2></div>
+  <div class="chart" id="chart_{{ 'daily' if page.tab == 'daily' else 'week' if page.tab == 'weekly' else 'month' }}_combo"
+       style="height: 330px;"></div>
+</section>
+
+<form method="post" action="{{ page.export_action }}" class="report-text-form">
+  <input type="hidden" name="tab" value="{{ page.tab }}">
+  {% for module in page.text_modules %}
+  <section class="card text-module-card">
+    <div class="card-head"><h2>{{ module.title }}</h2></div>
+    <textarea name="section_{{ loop.index }}" rows="{{ 4 if loop.first else 3 }}"
+              class="report-textarea"
+              placeholder="{{ '请填写本部分内容' if not loop.first else '' }}">{{ module.default }}</textarea>
+  </section>
+  {% endfor %}
+  <div class="export-center"><button class="btn btn-primary export-btn" type="submit">{{ page.export_label }}</button></div>
+</form>
+
+<dialog id="goalsDialog" class="modal-dialog">
+  <form method="post" action="/reports/save-goals">
+    <input type="hidden" name="tab" value="{{ page.tab }}">
+    <div class="modal-head"><h2>目标设置
+      {{ info.info(page.info.target_empty ~ ' 变更写入 output/目标变更日志.md。') }}</h2>
+      <button type="button" class="modal-close" id="closeGoals">关闭</button></div>
+    <div class="goal-card-grid">
+      <div class="goal-big-card">
+        <div class="goal-big-field">
+          <label for="monthly_sales_wan">月度销售目标（万元）</label>
+          <input id="monthly_sales_wan" type="number" step="0.01" name="monthly_sales_wan"
+                 value="{{ page.goals.monthly_sales_wan if page.goals.monthly_sales_wan is not none else '' }}"
+                 placeholder="留空表示不判定">
+        </div>
+      </div>
+      <div class="goal-big-card">
+        <div class="goal-big-field">
+          <label for="paid_ratio_limit">月度付费占比上限（%）</label>
+          <input id="paid_ratio_limit" type="number" step="0.01" name="paid_ratio_limit"
+                 value="{{ page.goals.paid_ratio_limit if page.goals.paid_ratio_limit is not none else '' }}"
+                 placeholder="留空表示不判定">
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" type="submit">保存目标</button>
+      <button type="button" class="btn btn-ghost" id="cancelGoals">取消</button>
+    </div>
+  </form>
+</dialog>
+
+{% endblock %}
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block scripts %}
+{# 页面脚本：绑定当前页面的交互和图表。 #}
+<script>
+{# 页面脚本入口：初始化页面交互。 #}
+(function () {
+  var dlg = document.getElementById('goalsDialog');
+  var open = document.getElementById('openGoals');
+  if (!dlg || !open) { return; }
+  open.addEventListener('click', function () { dlg.showModal(); });
+  document.getElementById('closeGoals').addEventListener('click', function () { dlg.close(); });
+  document.getElementById('cancelGoals').addEventListener('click', function () { dlg.close(); });
+})();
+</script>
+{% endblock %}

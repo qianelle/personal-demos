@@ -1,0 +1,667 @@
+/* ── 页面样式 ── */
+/* 作用：定义布局、组件、表格、报表与打印的视觉样式。 */
+/* 电商运营报表助手 · 样式表 */
+/* ── 全局变量 ── */
+/* 作用：颜色、间距、圆角与阴影。 */
+:root{--primary:#1f4e79;--primary-light:#2f6fa3;--primary-soft:#e8eff7;--bg:#f3f5f8;--card:#fff;--line:#e1e6ee;--line-dark:#cbd4e1;--text:#1f2937;--muted:#6b7280;--muted-2:#8a94a6;--red:#c0392b;--red-soft:#fdecea;--amber:#b9770e;--green:#1e8449;--green-soft:#e9f6ee;--sidebar:#14293d;--sidebar-hover:#1f3a53;--radius:8px;--shadow:0 1px 2px rgba(16,24,40,.06),0 6px 18px rgba(16,24,40,.05)}
+*{box-sizing:border-box}html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Segoe UI",sans-serif;font-size:13px;line-height:1.55}
+a{color:var(--primary-light);text-decoration:none}a:hover{color:var(--primary);text-decoration:underline}
+h1,h2,h3{margin:0;font-weight:700}.mono{font-family:Consolas,"Courier New",monospace}.muted{color:var(--muted)}.small{font-size:11px}
+.left{text-align:left}.right{text-align:right}.center{text-align:center}.empty{padding:26px;text-align:center;color:var(--muted)}
+/* ── 侧边栏 ── */
+/* 作用：系统名、导航和链接池入口。 */
+.sidebar{position:fixed;inset:0 auto 0 0;width:220px;background:var(--sidebar);color:#d8e3ee;display:flex;flex-direction:column;z-index:30}
+.brand{display:flex;align-items:center;gap:10px;padding:20px 18px 16px;border-bottom:1px solid rgba(255,255,255,.08)}
+.brand-mark{width:34px;height:34px;border-radius:7px;background:var(--primary-light);color:#fff;font-weight:700;font-size:17px;display:flex;align-items:center;justify-content:center}
+.brand-title{font-size:14px;font-weight:700;color:#fff}.brand-sub{font-size:11px;color:#8fa6bd;margin-top:2px}
+.nav{padding:12px 10px;flex:1}.nav-item{display:block;padding:10px 14px;margin-bottom:3px;border-radius:6px;color:#c4d3e2;font-size:13px}
+.nav-item:hover{background:var(--sidebar-hover);color:#fff;text-decoration:none}.nav-item.active{background:var(--primary-light);color:#fff;font-weight:700}
+.pool-trigger{display:flex;align-items:center;justify-content:space-between;width:100%;margin:2px 0 8px;padding:8px 12px;border:1px dashed rgba(255,255,255,.22);border-radius:6px;background:rgba(255,255,255,.05);color:#c4d3e2;font-size:12px;cursor:pointer}
+.pool-trigger:hover{background:var(--sidebar-hover);color:#fff}.pool-trigger small{color:#8fa6bd;font-size:11px}
+/* ── 主内容区 ── */
+/* 作用：页头、内容卡片和页脚的总布局。 */
+.main{margin-left:220px;min-height:100vh;padding:0 24px 28px}
+/* ── 页头 ── */
+/* 作用：页面标题、系统名和快照说明。 */
+.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:22px 0 14px}
+/* ── 页头 ── */
+/* 作用：页面标题、系统名和快照说明。 */
+.topbar h1{font-size:24px;color:#12324a;letter-spacing:.3px}.subtitle{margin-top:4px;color:var(--muted);font-size:12px}
+/* ── 页头 ── */
+/* 作用：页面标题、系统名和快照说明。 */
+.topbar-actions{display:flex;align-items:center;gap:10px;padding-top:2px}.snapshot{color:var(--muted);font-size:12px}
+.range-banner{background:#16283a;color:#e8f0f8;border-radius:7px;padding:10px 16px;font-size:13px;margin-bottom:16px}
+.updated-badge{margin-left:12px;padding:3px 8px;border-radius:10px;background:#fff3cd;color:#8a6d3b;font-size:12px}.range-switched{margin-left:8px;color:#f0f4f8;font-size:12px}
+.content{display:flex;flex-direction:column;gap:14px}.footer{margin-top:22px;padding:14px 2px 0;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px 10px;border-bottom:1px solid var(--line)}
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card-head h2{font-size:15px;color:#12324a}.card-note{color:var(--muted);font-size:11px}
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card:not(.chart-card):not(.table-card){padding:16px}.card.chart-card,.card.table-card{padding:0 0 12px}.card.chart-card .chart{padding:6px}
+/* ── 表格区域 ── */
+/* 作用：表格横向滚动与固定表头。 */
+.table-wrap{overflow:auto;padding:0 10px}.data-table{width:100%;border-collapse:collapse;table-layout:auto}
+/* ── 数据表格 ── */
+/* 作用：表头、单元格、排序与分页样式。 */
+.data-table th{background:#f5f8fc;color:#33475b;font-size:12px;font-weight:700;padding:9px 8px;border-bottom:1px solid var(--line-dark);white-space:nowrap}
+/* ── 数据表格 ── */
+/* 作用：表头、单元格、排序与分页样式。 */
+.data-table td{padding:8px;border-bottom:1px solid #edf1f6;font-size:12px;vertical-align:middle}.data-table tbody tr:hover{background:#f8fbff}
+.compact-table th,.compact-table td{padding:7px 6px}.click-row{cursor:pointer}
+.kpi-row{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:10px}
+.kpi-compact{display:block;background:#fff;border:1px solid var(--line);border-radius:8px;padding:11px 12px;box-shadow:var(--shadow);color:var(--text);min-width:0}
+.kpi-compact:hover{border-color:var(--primary-light);text-decoration:none}.kpi-compact.active{border-color:var(--primary);box-shadow:0 0 0 2px rgba(31,78,121,.12)}
+.kpi-compact-label{font-size:11px;color:var(--muted);display:flex;align-items:center}
+.kpi-compact-value{font-size:21px;font-weight:700;color:#12324a;margin:4px 0 2px;white-space:nowrap}.kpi-compact-value small{font-size:10px;color:var(--muted);margin-left:2px;font-weight:400}
+.kpi-compact-delta{font-size:11px;color:var(--muted)}.kpi-compact-delta.up{color:var(--red)}.kpi-compact-delta.down{color:var(--green)}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row{grid-template-columns:repeat(8,minmax(0,1fr))}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;border:1px solid var(--line-dark);border-radius:6px;background:#fff;color:var(--text);padding:6px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
+.btn:hover{text-decoration:none;border-color:var(--primary-light);color:var(--primary)}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-light);color:#fff}.btn-ghost{background:transparent}
+.filter-bar{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 8px;display:flex;align-items:center;flex-wrap:wrap;gap:12px;box-shadow:var(--shadow)}
+.filter-group{display:flex;align-items:center;gap:6px}.filter-group>label{color:var(--muted);font-size:12px;white-space:nowrap}
+.filter-bar input,.filter-bar select,.inline-form input,.inline-form select,.batch-query-form input,.column-filter-form input,.column-filter-form select,.goal-form input{border:1px solid var(--line-dark);border-radius:5px;padding:6px 8px;font-size:12px;background:#fff;color:var(--text)}
+.filter-bar input[type="date"]{width:132px}.filter-bar select{min-width:116px;max-width:180px}.filter-textarea{width:150px;resize:vertical;min-height:30px}
+.filter-sep{color:var(--muted)}.filter-tags{gap:8px;flex-wrap:wrap}.tag-check{display:inline-flex;align-items:center;gap:3px;font-size:12px;white-space:nowrap}
+.filter-actions{display:flex;gap:8px;align-items:center}.quick-ranges{flex-basis:100%;display:flex;align-items:center;gap:10px;border-top:1px dashed var(--line);padding-top:8px;color:var(--muted);font-size:12px}
+.quick-ranges a{color:var(--muted);padding:2px 6px;border-radius:4px}.quick-ranges a.active,.quick-ranges a:hover{background:var(--primary-soft);color:var(--primary);text-decoration:none}
+.inline-form{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 16px}.inline-search{display:flex;gap:8px;padding:8px 16px}.inline-label{display:inline-flex;align-items:center;gap:5px}
+/* ── 图表 ── */
+/* 作用：图表容器与两栏布局。 */
+.chart{width:100%;padding:4px 8px 8px}.chart-grid,.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.span-2{grid-column:span 2}.promo-grid{align-items:stretch}
+.anomaly-summary-card{padding:0!important}.anomaly-summary-link{display:block;padding:12px 16px;font-size:14px;color:#12324a}.anomaly-summary-link strong{color:var(--red);font-size:17px}.anomaly-link{color:var(--primary);text-decoration:underline}
+.link-query-bar{background:#eef6ff;border:1px solid #c7dcf2;border-radius:6px;padding:9px 14px;color:#24527a}.link-query-bar.warn{background:#fff8e8;border-color:#ecd39b;color:#8a5a10}
+.notice-card{border-radius:6px;padding:9px 14px;font-size:12px}.notice-card.success{background:var(--green-soft);border:1px solid #b9dfc7;color:#1e6b3b}.pool-notice{margin-bottom:12px}
+.summary-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:10px 16px}.summary-strip>div{background:#f7fafd;border:1px solid var(--line);border-radius:6px;padding:8px 10px}
+.strip-label{display:block;color:var(--muted);font-size:11px}.strip-value{font-size:17px;font-weight:700;color:#12324a}
+.pagination{display:flex;align-items:center;gap:10px;padding:10px 16px 0;flex-wrap:wrap}
+.definition-list{display:flex;flex-direction:column;gap:8px}.definition-item{display:flex;gap:10px;align-items:baseline;font-size:12px}.definition-item strong{min-width:76px;color:#12324a}.definition-item span{color:var(--muted)}
+details.collapsible{padding:0 16px 12px}details.collapsible>summary{cursor:pointer;padding:13px 0;color:#12324a}details.collapsible>summary::marker{color:var(--primary)}
+/* ── 标签卡 ── */
+/* 作用：链接管理顶部的标签卡片。 */
+.mgmt-card-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}.mgmt-card{padding:12px 14px}.mgmt-card-label{font-size:12px;color:var(--muted)}.mgmt-card-value{font-size:21px;font-weight:700;color:var(--primary);margin-top:3px}.mgmt-card-value span{font-size:11px;color:var(--muted);font-weight:400;margin-left:2px}.mgmt-card.active,.mgmt-card:hover{border-color:var(--primary);box-shadow:0 0 0 2px rgba(31,78,121,.1);text-decoration:none}
+.mgmt-owner-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}.mgmt-owner-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.mgmt-owner-label{font-weight:700}.mgmt-pool-note{color:var(--muted);font-size:12px}
+.batch-query-form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px dashed var(--line)}.batch-query-form input[type="search"]{width:300px}
+.filter-panel{margin:0 16px;border-bottom:1px dashed var(--line)}.filter-panel>summary{cursor:pointer;color:var(--primary);font-weight:700;padding:9px 0}.column-filter-form{padding:2px 0 10px}
+.filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.filter-cell{display:flex;flex-direction:column;gap:4px}.filter-cell label{font-size:12px;color:var(--muted)}.filter-cell input,.filter-cell select{width:100%}.filter-cell select{min-height:64px}
+.mgmt-batch-bar{display:flex;flex-direction:column;gap:8px;padding:10px 16px;background:#f8fbff;border-bottom:1px solid var(--line)}.mgmt-batch-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.mgmt-table td,.mgmt-table th{white-space:nowrap}.mgmt-table td:nth-child(3){white-space:normal;min-width:240px}
+.sort-link{color:inherit;white-space:nowrap}.sort-link:hover{color:var(--primary);text-decoration:none}.sort-arrow{color:var(--primary);font-size:10px;margin-left:2px}
+/* ── 弹窗 ── */
+/* 作用：链接池与目标设置弹窗。 */
+.modal-dialog{width:min(760px,94vw);border:0;border-radius:10px;padding:0;box-shadow:0 24px 70px rgba(16,24,40,.28)}.modal-dialog::backdrop{background:rgba(15,26,38,.45)}.modal-dialog form{padding:18px 20px 20px}
+.modal-head{display:flex;align-items:center;justify-content:space-between}.modal-head h2{font-size:17px}.modal-close{border:0;background:none;color:var(--muted);cursor:pointer}.modal-textarea{width:100%;margin-top:8px;padding:10px;border:1px solid var(--line-dark);border-radius:6px;font-size:13px}
+.modal-modes{display:flex;gap:16px;margin:12px 0;align-items:center}.modal-actions{display:flex;gap:10px}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line-dark)}.tab{padding:9px 20px;border:1px solid transparent;border-bottom:0;border-radius:6px 6px 0 0;color:var(--muted);font-size:13px}.tab:hover{text-decoration:none;color:var(--primary)}.tab.active{background:#fff;border-color:var(--line-dark);color:var(--primary);font-weight:700}
+/* ── 报表顶部 ── */
+/* 作用：页签、目标按钮和关键指标。 */
+.report-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px}.report-actions-line{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dash-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.dash-block{border:1px solid var(--line);border-radius:8px;padding:14px 16px;background:#fbfcfe;min-width:0}.dash-block.warn{border-color:#e7b2ab;background:#fffafa}.dash-title{font-weight:700}.dash-big{font-size:36px;line-height:1.2;font-weight:700;color:var(--primary);margin:22px 0 14px}.dash-caption{color:var(--muted);font-size:12px;margin-top:8px}.text-warn{color:var(--red)!important}
+.progress,.gauge{height:12px;border-radius:8px;background:#e8eff7;overflow:hidden;position:relative}.progress-bar,.gauge-bar{height:100%;background:var(--primary);border-radius:8px}.gauge-bar.over{background:var(--red)}
+.goal-card-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:16px}.goal-big-card{padding:18px 20px}.goal-big-field{display:flex;flex-direction:column;gap:10px;margin-top:15px}.goal-big-field label{font-size:14px;font-weight:700}.goal-big-field input{width:100%;font-size:18px;padding:12px 14px;border:1px solid var(--line-dark);border-radius:7px}
+.goal-actions{display:flex;gap:12px;margin-bottom:18px}.goal-current-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.goal-current-card{border:1px solid var(--line);border-radius:8px;padding:16px}.goal-current-label{color:var(--muted);font-size:12px}.goal-current-value{font-size:26px;font-weight:700;color:var(--primary);margin-top:6px}.goal-current-value small{font-size:12px;color:var(--muted);font-weight:400}
+.info-tip{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:5px;border:1px solid var(--line-dark);border-radius:50%;color:var(--muted);font-size:11px;line-height:1;cursor:help;position:relative;vertical-align:1px}
+.info-tip:hover,.info-tip:focus,.info-tip.open{color:var(--primary);border-color:var(--primary);outline:none}.info-tip::after{content:attr(data-tip);position:absolute;left:50%;bottom:22px;transform:translateX(-50%);width:280px;padding:9px 11px;background:#14293d;color:#f4f8fc;border-radius:6px;font-size:12px;line-height:1.6;box-shadow:var(--shadow);z-index:80;white-space:normal;text-align:left;display:none}.info-tip:hover::after,.info-tip:focus::after,.info-tip.open::after{display:block}
+.kpi-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.kpi-card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px}.kpi-label{color:var(--muted);font-size:12px}.kpi-value{font-size:20px;font-weight:700;color:#12324a;margin-top:4px}
+.mapping-card .mapping-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 16px}.mapping-grid>div{border-bottom:1px dashed var(--line);padding:5px 0;font-size:12px}.mapping-grid>div span{display:block;color:var(--muted);font-size:11px}.raw-block{margin:6px 16px}.raw pre{background:#f7f9fc;padding:10px;overflow:auto;font-size:11px}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media(max-width:1400px){.kpi-row,.report-kpi-row{grid-template-columns:repeat(5,minmax(0,1fr))}}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media(max-width:1100px){.kpi-row,.report-kpi-row{grid-template-columns:repeat(3,minmax(0,1fr))}.mgmt-card-grid{grid-template-columns:repeat(3,1fr)}.filter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.dash-grid,.goal-card-grid,.goal-current-grid{grid-template-columns:1fr}.grid-2{grid-template-columns:1fr}.span-2,.chart-card.span-2{grid-column:span 1}}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media(max-width:760px){.sidebar{width:64px}.brand-text,.sidebar-foot,.nav-item{display:none}.pool-trigger span,.pool-trigger small{display:none}.main{margin-left:64px;padding:0 12px 20px}.kpi-row,.report-kpi-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+
+/*  报表文字模块与链接快捷查询 */
+.quick-query-form { display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 16px; border-bottom:1px dashed var(--line); }
+.quick-query-form label, .quick-query-form select, .quick-query-form input { font-size:14px; }
+.quick-query-form select, .quick-query-form input { height:38px; padding:7px 10px; }
+.quick-query-form input[type="text"] { width:320px; }
+.link-toolbar { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; }
+.link-toolbar-left { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.tag-help { display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px;
+  border:1.5px solid #1B4F8C; border-radius:50%; color:#1B4F8C; font-weight:700; cursor:help; position:relative; }
+.tag-help::after { content:attr(data-tip); position:absolute; left:0; bottom:28px; width:340px;
+  padding:12px 14px; background:#22303F; color:#fff; border-radius:7px; font-size:13px;
+  line-height:1.7; display:none; z-index:99; white-space:normal; box-shadow:var(--shadow); }
+.tag-help:hover::after { display:block; }
+.report-text-form { display:flex; flex-direction:column; gap:14px; }
+.text-module-card { padding:16px 18px; }
+.report-textarea { width:100%; min-height:92px; resize:vertical; border:1px solid var(--line-dark);
+  border-radius:7px; padding:12px 14px; font-size:14px; line-height:1.8; color:var(--text);
+  background:#FBFCFE; font-family:"Microsoft YaHei","PingFang SC",sans-serif; }
+.report-textarea:focus { outline:none; border-color:#1B4F8C; box-shadow:0 0 0 3px rgba(27,79,140,.08); }
+.export-center { display:flex; justify-content:center; padding:8px 0 4px; }
+.export-btn { min-width:200px; height:42px; font-size:15px; }
+
+
+/*  视觉与链接管理 */
+.link-toolbar { display:flex; align-items:center; justify-content:space-between; padding:10px 16px; }
+.link-toolbar-left { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.quick-query-form { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:12px 16px; border-bottom:1px dashed var(--line); }
+.quick-query-form label { color: var(--muted); font-size: 14px; }
+.quick-query-form select, .quick-query-form input { height: 36px; min-height: 36px; font-size: 14px; }
+.quick-query-form input { width: 300px; }
+.tag-help { display:inline-flex; align-items:center; justify-content:center; width:17px; height:17px; border:1px solid var(--line-dark); border-radius:50%; color:var(--muted); font-size:12px; font-weight:700; cursor:help; position:relative; }
+.tag-help::after { content: attr(data-tip); position:absolute; left:50%; bottom:24px; transform:translateX(-50%); width:300px; padding:10px 12px; background:#14293d; color:#f4f8fc; border-radius:6px; font-size:12px; font-weight:400; line-height:1.65; display:none; z-index:90; white-space:normal; box-shadow:var(--shadow); }
+.tag-help:hover::after { display:block; }
+/* ── 全局变量 ── */
+/* 作用：颜色、间距、圆角与阴影。 */
+:root {
+  --primary: #1B4F8C; --primary-light: #2563A6; --primary-soft: #EAF2FB;
+  --teal: #2E9E9B; --orange: #E8944A; --purple: #7A6BB5;
+  --red: #D9534F; --amber: #E8A33D; --green: #3E9B6B;
+  --bg: #F4F7FB; --text: #22303F; --muted: #6B7A8C;
+  --line: #E6ECF3; --line-dark: #DDE5EE;
+}
+html, body { font-size: 14px; line-height: 1.6; color: var(--text); background: var(--bg); }
+.filter-bar input, .filter-bar select, .inline-form input, .inline-form select,
+.batch-query-form input, .column-filter-form input, .column-filter-form select,
+.goal-form input { font-size: 14px; height: 36px; }
+/* ── 数据表格 ── */
+/* 作用：表头、单元格、排序与分页样式。 */
+.data-table th, .data-table td { font-size: 14px; }
+.kpi-compact-value { font-size: 26px; }
+.kpi-compact-label, .kpi-compact-delta { font-size: 13px; }
+.muted, .small, .card-note, .dash-caption, .snapshot { font-size: 12px; }
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card { padding: 16px 18px; }
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card.chart-card, .card.table-card { padding: 0 0 14px; }
+/* ── 图表 ── */
+/* 作用：图表容器与两栏布局。 */
+.chart { padding: 8px; }
+/* ── 表格区域 ── */
+/* 作用：表格横向滚动与固定表头。 */
+.table-wrap { overflow-x: auto; }
+/* ── 数据表格 ── */
+/* 作用：表头、单元格、排序与分页样式。 */
+.data-table { min-width: 100%; }
+/* ── 数据表格 ── */
+/* 作用：表头、单元格、排序与分页样式。 */
+.data-table th { position: sticky; top: 0; z-index: 2; }
+.mgmt-table { min-width: 1500px; }
+.mgmt-table th, .mgmt-table td { white-space: nowrap; }
+.mgmt-table td:nth-child(3) { white-space: normal; min-width: 260px; max-width: 360px; }
+.filter-grid { gap: 14px; }
+.page-size-form, .page-jump-form { gap: 8px; }
+.info-tip { width: 17px; height: 17px; }
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 1100px) { .mgmt-table { min-width: 1300px; } }
+
+/* ── 标签卡 ── */
+/* 作用：链接管理顶部的标签卡片。 */
+.mgmt-card-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 1200px) { .mgmt-card-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+
+/*  KPI 4×2 自适应网格与四行卡内排布 */
+.kpi-grid-8 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 14px;
+}
+.kpi-grid-8 .kpi-compact {
+  height: 132px;
+  min-width: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  overflow: hidden;
+  border-radius: 10px;
+  text-decoration: none;
+}
+.kpi-grid-8 .kpi-compact-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 20px;
+  margin: 0;
+  color: #6B7A8C;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.kpi-grid-8 .kpi-compact-label > span:first-child {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.kpi-grid-8 .kpi-compact-label .info-tip { flex: 0 0 auto; }
+.kpi-grid-8 .kpi-compact-value {
+  min-width: 0;
+  margin-top: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #22303F;
+  font-size: clamp(20px, 1.55vw, 26px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.kpi-grid-8 .kpi-unit {
+  min-height: 18px;
+  margin-top: 1px;
+  color: #6B7A8C;
+  font-size: 12px;
+  line-height: 18px;
+}
+.kpi-grid-8 .kpi-unit.is-empty { visibility: hidden; }
+.kpi-grid-8 .kpi-compact-delta {
+  margin-top: auto;
+  padding-top: 6px;
+  color: #6B7A8C;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kpi-grid-8 .kpi-compact-delta.up { color: #3E9B6B; }
+.kpi-grid-8 .kpi-compact-delta.down { color: #D9534F; }
+.kpi-grid-8 .kpi-compact.active {
+  border: 2px solid #2563A6;
+  background: #EEF4FB;
+  box-shadow: 0 2px 10px rgba(27, 79, 140, .12);
+}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 1100px) {
+  .kpi-grid-8 { grid-template-columns: repeat(2, minmax(220px, 1fr)); }
+}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 640px) {
+  .kpi-grid-8 { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/*  目标达成看板三卡同行 */
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+.dash-grid .dash-block {
+  height: 100%;
+  min-width: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+.dash-grid .dash-title { min-height: 24px; }
+.dash-grid .dash-caption { margin-top: auto; font-size: 12px; line-height: 1.55; }
+.scene-stack {
+  display: flex;
+  width: 100%;
+  height: 14px;
+  margin: 12px 0 14px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #E6ECF3;
+}
+.scene-stack span { display: block; height: 100%; min-width: 0; }
+.scene-rows { display: flex; flex-direction: column; gap: 9px; }
+.scene-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.scene-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #22303F;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scene-name i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: 0 0 auto;
+}
+.scene-cost { color: #22303F; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scene-ratio { color: #6B7A8C; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.scene-total {
+  margin-top: auto;
+  padding-top: 10px;
+  color: #6B7A8C;
+  font-size: 12px;
+  border-top: 1px dashed #E6ECF3;
+}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 1100px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 640px) {
+  .dash-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/*  经营分析筛选区：宽松一行半、16px、38px */
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 14px 18px;
+  padding: 16px 18px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-group > label,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-sep,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-actions .btn,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .quick-ranges span,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .quick-ranges a {
+  font-size: 16px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter input,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter select,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter textarea,
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-actions .btn {
+  height: 38px;
+  min-height: 38px;
+  font-size: 16px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter select { min-width: 140px; }
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-textarea {
+  height: 38px;
+  min-height: 38px;
+  line-height: 20px;
+  padding: 8px 10px;
+  resize: none;
+  width: 260px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .filter-actions { gap: 12px; }
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .quick-ranges {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .quick-ranges a {
+  padding: 8px 14px;
+  border-radius: 18px;
+  line-height: 20px;
+}
+/* ── 经营分析筛选 ── */
+/* 作用：筛选控件尺寸与快捷区间。 */
+.analysis-filter .quick-ranges a.active {
+  padding: 8px 14px;
+}
+
+
+/*  数据报表顶部与关键指标 */
+/* ── 报表顶部 ── */
+/* 作用：页签、目标按钮和关键指标。 */
+.report-toolbar { padding: 0 0 14px; }
+/* ── 报表页签 ── */
+/* 作用：日报、周报、月报切换。 */
+.report-tabs-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+/* ── 报表页签 ── */
+/* 作用：日报、周报、月报切换。 */
+.report-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+/* ── 报表页签 ── */
+/* 作用：日报、周报、月报切换。 */
+.report-tabs .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 28px;
+  border: 0;
+  border-radius: 7px;
+  background: #EEF4FB;
+  color: #6B7A8C;
+  font-size: 18px;
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 3px solid transparent;
+}
+/* ── 报表页签 ── */
+/* 作用：日报、周报、月报切换。 */
+.report-tabs .tab.active {
+  background: #2563A6;
+  color: #fff;
+  border-bottom-color: #E8944A;
+}
+.goal-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 7px;
+  background: #E8944A;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.goal-tab-btn:hover { background: #D07F35; }
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row .report-kpi {
+  min-width: 0;
+  height: 112px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row .kpi-compact-label {
+  color: #6B7A8C;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row .kpi-compact-value {
+  min-width: 0;
+  margin-top: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: #22303F;
+  font-size: clamp(18px, 1.25vw, 22px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row .kpi-unit {
+  min-height: 16px;
+  margin-top: 2px;
+  color: #6B7A8C;
+  font-size: 12px;
+  line-height: 16px;
+}
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+.report-kpi-row .report-kpi:not(:has(.kpi-unit)) .kpi-compact-value { margin-bottom: 0; }
+/* ── 窄屏适配 ── */
+/* 作用：不同宽度下的布局变化。 */
+@media (max-width: 900px) {
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+  .report-kpi-row { gap: 8px; }
+/* ── 报表指标 ── */
+/* 作用：八张关键指标卡一行展示。 */
+  .report-kpi-row .report-kpi { padding: 12px; }
+}
+
+
+/*  链接管理操作区：快捷查询与批量操作同一行 */
+.link-op-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px dashed var(--line);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.link-op-row .quick-query-form {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  flex: 0 0 auto;
+}
+.link-op-row .quick-query-form label,
+.link-op-row .quick-query-form select,
+.link-op-row .quick-query-form input,
+.link-op-row .quick-query-form .btn,
+.batch-inline select,
+.batch-inline .btn {
+  font-size: 16px;
+  height: 38px;
+  min-height: 38px;
+}
+.link-op-row .quick-query-form input[type="text"] { width: 280px; }
+.batch-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.batch-inline select { min-width: 130px; }
+.batch-inline form { display: none; }
+
+
+/* 可调整列宽表格、全选与表格操作 */
+/* ── 内容卡片 ── */
+/* 作用：各页面统一的白色卡片容器。 */
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.table-head-actions { display: flex; align-items: center; gap: 10px; }
+.table-head-actions .btn { height: 34px; font-size: 14px; }
+/* ── 可调宽表格 ── */
+/* 作用：列宽拖动、表头手柄和列宽保存。 */
+.resizable-table { table-layout: fixed; width: max-content; min-width: 100%; }
+/* ── 可调宽表格 ── */
+/* 作用：列宽拖动、表头手柄和列宽保存。 */
+.resizable-table th { position: sticky; top: 0; z-index: 2; }
+/* ── 可调宽表格 ── */
+/* 作用：列宽拖动、表头手柄和列宽保存。 */
+.resizable-table th.has-resizer { position: relative; padding-right: 14px; }
+.col-resizer {
+  position: absolute; top: 0; right: 0; width: 6px; height: 100%;
+  cursor: col-resize; z-index: 4; background: transparent;
+}
+.col-resizer::after {
+  content: ""; position: absolute; top: 18%; right: 2px; width: 1px;
+  height: 64%; background: #DDE5EE;
+}
+.col-resizing { cursor: col-resize; user-select: none; }
+.col-resizing * { cursor: col-resize !important; }
+.select-all-label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* ── 表格区域 ── */
+/* 作用：表格横向滚动与固定表头。 */
+.table-wrap { overflow-x: auto; }
+
+.system-kicker{font-size:12px;color:#6B7A8C;letter-spacing:.04em;margin-bottom:2px}
+.col-resizer:hover{background:rgba(27,79,140,.16)}
+.col-resizer:hover::after{background:#1B4F8C}
+/* ── 可调宽表格 ── */
+/* 作用：列宽拖动、表头手柄和列宽保存。 */
+.resizable-table th.has-resizer{cursor:col-resize}
+/* ── 可调宽表格 ── */
+/* 作用：列宽拖动、表头手柄和列宽保存。 */
+.resizable-table th.has-resizer a.sort-link{cursor:pointer}

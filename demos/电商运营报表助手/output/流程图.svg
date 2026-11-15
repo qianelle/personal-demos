@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500">
+  <style>
+    .title{font:700 24px "Microsoft YaHei",sans-serif;fill:#1B4F8C}
+    .box{fill:#EAF2FB;stroke:#1B4F8C;stroke-width:1.5;rx:8}
+    .box2{fill:#EAF7F6;stroke:#2E9E9B;stroke-width:1.5;rx:8}
+    .box3{fill:#FFF4E8;stroke:#E8944A;stroke-width:1.5;rx:8}
+    .h{font:700 16px "Microsoft YaHei",sans-serif;fill:#22303F}
+    .s{font:13px "Microsoft YaHei",sans-serif;fill:#6B7A8C}
+  </style>
+  <text x="30" y="42" class="title">电商运营报表助手</text>
+  <text x="30" y="68" class="s">把电商运营每天、每周、每月手工拼数与交表的活，做成能自动出数、能按标签管理链接、能直接导出日报周报月报的小工具</text>
+
+  <rect x="30" y="100" width="300" height="220" class="box"/>
+  <text x="50" y="130" class="h">经营分析 /</text>
+  <text x="50" y="160" class="s">筛选与标签单选，点查询生效</text>
+  <text x="50" y="184" class="s">快捷区间：昨日 / 近7天 / 近30天 / 近60天</text>
+  <text x="50" y="208" class="s">8 张 KPI，点击只看趋势</text>
+  <text x="50" y="232" class="s">推广两栏与 16 列计划表</text>
+  <text x="50" y="256" class="s">计划表列宽可拖动，可导出表格</text>
+  <text x="50" y="280" class="s">指标说明折叠区</text>
+
+  <rect x="350" y="100" width="300" height="220" class="box2"/>
+  <text x="370" y="130" class="h">链接管理 /links</text>
+  <text x="370" y="160" class="s">7 张标签卡，默认全部链接</text>
+  <text x="370" y="184" class="s">快捷查询与批量标签同一行</text>
+  <text x="370" y="208" class="s">高级筛选默认收起</text>
+  <text x="370" y="232" class="s">表头全选当前页，列宽可拖动</text>
+  <text x="370" y="256" class="s">分页 20/50/100，可导出表格</text>
+  <text x="370" y="280" class="s">链接池三模块共享</text>
+
+  <rect x="670" y="100" width="300" height="220" class="box3"/>
+  <text x="690" y="130" class="h">数据报表 /reports</text>
+  <text x="690" y="160" class="s">日报 / 周报 / 月报</text>
+  <text x="690" y="184" class="s">目标设置紧邻月报之后</text>
+  <text x="690" y="208" class="s">三卡目标达成看板</text>
+  <text x="690" y="232" class="s">组合图与末点标注</text>
+  <text x="690" y="256" class="s">可编辑文字模块与自包含 HTML</text>
+  <text x="690" y="280" class="s">打印 / 另存 PDF 上交</text>
+
+  <rect x="30" y="360" width="940" height="100" fill="#F8FAFC" stroke="#DDE5EE" stroke-width="1.5" rx="8"/>
+  <text x="50" y="390" class="h">日常流程</text>
+  <text x="50" y="418" class="s">看数 → 管链接 → 出报表。单链接明细 /item/&lt;id&gt; 为二级页面。</text>
+  <text x="50" y="442" class="s">数据区间 2026-08-06 ~ 2026-11-08（95 天）；个人练习项目，模拟脱敏数据，未接生产。</text>
+</svg>

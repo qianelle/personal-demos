@@ -1,0 +1,144 @@
+{# ── 经营分析页 ── #}
+{# 作用：展示筛选、指标卡、趋势、推广两栏与推广计划表。 #}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_info.html" as info %}
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block content %}
+
+<form class="filter-bar analysis-filter" method="get" action="/" id="analysis-filter">
+  <div class="filter-group">
+    <label>日期区间</label>
+    <input type="date" name="start" value="{{ filters.start }}" min="{{ start_date }}" max="{{ end_date }}">
+    <span class="filter-sep">至</span>
+    <input type="date" name="end" value="{{ filters.end }}" min="{{ start_date }}" max="{{ end_date }}">
+  </div>
+  <div class="filter-group">
+    <label>款号</label>
+    <select name="style">
+      <option value="">全部款号</option>
+      {% for s in filter_options.styles %}<option value="{{ s }}" {% if filters.style_code == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="filter-group">
+    <label>链接ID</label>
+    <textarea name="item" rows="1" class="filter-textarea" placeholder="可多条，逗号/空格/换行分隔">{{ filters.item_ids_input }}</textarea>
+  </div>
+  <div class="filter-group">
+    <label>标签</label>
+    <select name="tag">
+      <option value="">全部标签</option>
+      {% for tag in filter_options.tags %}
+      <option value="{{ tag }}" {% if filters.tags and filters.tags[0] == tag %}selected{% endif %}>{{ tag }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="filter-actions">
+    <button type="submit" class="btn btn-primary">查询</button>
+    <a class="btn btn-ghost" href="/">重置</a>
+  </div>
+  <div class="quick-ranges">
+    <span>快捷区间：</span>
+    {% for item in quick_ranges %}<a href="{{ item.href }}" class="{% if item.active %}active{% endif %}">{{ item.label }}</a>{% endfor %}
+  </div>
+</form>
+
+
+
+<section class="kpi-row kpi-grid-8">
+  {% for k in page.kpis.cards %}
+  <a class="kpi-compact {% if k.active %}active{% endif %}" href="#" data-metric="{{ k.metric }}">
+    <div class="kpi-compact-label"><span>{{ k.label }}</span>{{ info.info(page.info.sales) }}</div>
+    <div class="kpi-compact-value">{{ k.value|fmtv(k.fmt) }}</div>
+    {% if k.unit %}<div class="kpi-unit">{{ k.unit }}</div>{% else %}<div class="kpi-unit is-empty"></div>{% endif %}
+    <div class="kpi-compact-delta {% if k.delta is not none and k.delta > 0 %}up{% elif k.delta is not none and k.delta < 0 %}down{% endif %}">
+      {% if page.kpis.full_range or k.delta is none %}环比 —
+      {% elif k.delta_kind == 'pp' %}较 {{ page.kpis.compare_label }} {{ k.delta|fmtv('pp') }}
+      {% else %}较 {{ page.kpis.compare_label }} {{ (k.delta * 100)|fmtv('num') }}%{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</section>
+
+<div class="card chart-card">
+  <div class="card-head"><h2 id="trendTitle">{{ page.trend.label }}趋势（按日）｜{{ page.range_label }}（上期 {{ page.trend.compare_label }}）</h2></div>
+  <div class="chart" id="chart_trend" style="height: 330px;"></div>
+</div>
+
+<section class="grid-2 promo-grid">
+  <div class="card chart-card">
+    <div class="card-head"><h2>一级场景花费占比｜{{ page.range_label }}</h2></div>
+    <div class="chart" id="chart_scene_cost" style="height: 300px;"></div>
+    <div class="muted small">合计花费：{{ page.scene.total_cost|fmtv('money') }} 元</div>
+  </div>
+  <div class="card chart-card">
+    <div class="card-head"><h2>一级场景总投产比与支付转化率｜{{ page.range_label }}
+      {{ info.info(page.info.scene_ratio) }}</h2></div>
+    <div class="chart" id="chart_scene_roi" style="height: 300px;"></div>
+  </div>
+</section>
+
+<section class="card table-card">
+  <div class="card-head"><h2>推广计划｜{{ page.range_label }}
+    {{ info.info(page.info.plan_aggregate ~ ' ' ~ page.info.plan_note) }}</h2>
+    <div class="table-head-actions">
+      <button type="button" class="btn btn-ghost" data-auto-table="planTable">自动列宽</button>
+      <button type="button" class="btn btn-ghost" data-reset-table="planTable">重置列宽</button>
+      <a class="btn btn-primary" href="{{ page.plan.export_url }}">导出表格</a>
+    </div>
+  </div>
+  <form method="get" action="/" class="inline-form plan-filter">
+    <input type="hidden" name="start" value="{{ filters.start }}">
+    <input type="hidden" name="end" value="{{ filters.end }}">
+    <input type="hidden" name="style" value="{{ filters.style_code }}">
+    <input type="hidden" name="item" value="{{ filters.item_ids_input }}">
+    {% if filters.tags %}<input type="hidden" name="tag" value="{{ filters.tags[0] }}">{% endif %}
+    <input type="hidden" name="psort" value="{{ page.plan.sort }}">
+    <input type="hidden" name="porder" value="{{ page.plan.order }}">
+    <label>投产比低于 <input type="number" step="0.01" name="roi_below"
+      value="{{ page.plan.roi_below if page.plan.roi_below is not none else '' }}"></label>
+    <label>支付转化率低于（%）<input type="number" step="0.1" name="cvr_below"
+      value="{{ page.plan.cvr_below if page.plan.cvr_below is not none else '' }}"></label>
+    <button class="btn btn-primary" type="submit">查询</button>
+    <a class="btn btn-ghost" href="{{ page.plan.reset_url }}">重置条件</a>
+  </form>
+  <div class="table-wrap"><table id="planTable" class="data-table compact-table resizable-table"
+         data-resizable="planTable">
+    <colgroup>
+      {% for col in page.plan.columns %}<col style="width: {{ col.width }}px">{% endfor %}
+    </colgroup>
+    <thead><tr>
+      {% for col in page.plan.columns %}
+      <th class="{{ col.align }}"><a class="sort-link" href="{{ page.plan.sort_urls[col.key] }}">{{ col.label }}
+        {% if page.plan.sort == col.key %}<span class="sort-arrow">{{ '▲' if page.plan.order == 'asc' else '▼' }}</span>{% endif %}
+      </a></th>
+      {% endfor %}
+    </tr></thead>
+    <tbody>{% for row in page.plan.rows %}
+      <tr>{% for col in page.plan.columns %}
+        <td class="{{ col.align }}{% if col.key == 'plan_id' %} mono{% endif %}">
+          {% if col.kind == 'text' %}{{ row[col.key] }}
+          {% elif col.kind == 'pct' %}{{ row[col.key]|fmtv('pct') }}
+          {% elif col.kind == 'ratio' %}{{ row[col.key]|fmtv('ratio') }}
+          {% else %}{{ row[col.key]|fmtv(col.kind) }}{% endif %}
+        </td>
+      {% endfor %}</tr>
+    {% else %}<tr><td colspan="16" class="empty">当前条件下暂无计划</td></tr>{% endfor %}</tbody>
+  </table></div>
+  <div class="pagination">
+    {% if page.plan.prev_url %}<a class="btn btn-ghost" href="{{ page.plan.prev_url }}">上一页</a>{% endif %}
+    <span class="muted">每页 {{ page.plan.size }} 条 · 第 {{ page.plan.page }} / {{ page.plan.pages }} 页 · 共 {{ page.plan.total }} 条</span>
+    {% if page.plan.next_url %}<a class="btn btn-ghost" href="{{ page.plan.next_url }}">下一页</a>{% endif %}
+  </div>
+</section>
+
+<details class="collapsible card">
+  <summary><strong>指标说明</strong></summary>
+  <div class="definition-list">
+    {% for item in page.dictionary.metrics %}
+    <div class="definition-item"><strong>{{ item.name }}</strong><span>{{ item.formula }}（{{ item.date }}）</span></div>
+    {% endfor %}
+  </div>
+</details>
+
+{% endblock %}

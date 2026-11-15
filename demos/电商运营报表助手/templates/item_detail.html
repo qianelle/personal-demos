@@ -1,0 +1,52 @@
+{# ── 单链接明细页 ── #}
+{# 作用：展示单条链接的趋势、结构和基础信息。 #}
+{% extends "base.html" %}
+{% import "_macros.html" as m %}
+{% import "_info.html" as info %}
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block content %}
+{% set mp = page.mapping %}
+<div class="card mapping-card">
+  <div class="card-head"><h2>链接主数据
+    {{ info.info('主数据映射粒度 shop_id + item_id；未映射链接只报不猜。') }}</h2></div>
+  {% if mp %}
+  <div class="mapping-grid">
+    <div><span>店铺</span>{{ mp.shop_name }}</div>
+    <div><span>链接ID</span>{{ mp.item_id }}</div>
+    <div class="span-2"><span>链接标题</span>{{ mp.item_title }}</div>
+    <div><span>款号</span>{{ mp.style_code }}</div>
+    <div><span>款名</span>{{ mp.style_name }}</div>
+    <div><span>一级品类</span>{{ mp.category_l1 }}</div>
+    <div><span>二级品类</span>{{ mp.category_l2 }}</div>
+    <div><span>素材库编号</span>{{ mp.asset_lib_id }}</div>
+    <div><span>详情页素材标识</span>{{ mp.season_asset_version }}</div>
+    <div><span>主图文案标识</span>{{ mp.main_image_copy_version }}</div>
+    <div><span>相似链接组</span>{{ mp.similar_group_id }}</div>
+    <div><span>链接状态</span>{{ mp.item_status }}</div>
+    <div><span>映射来源</span>{{ mp.mapping_source }}</div>
+    <div><span>上架日期</span>{{ mp.launch_date or '—' }}</div>
+    <div><span>当前标签</span>{{ mp.current_tag or '未打标' }}</div>
+    <div><span>冻结标记</span>{{ '已冻结' if mp.frozen_flag == 1 else '未冻结' }}</div>
+    <div><span>主推标记</span>{{ '主推' if mp.is_primary == 1 else '非主推' }}</div>
+  </div>
+  {% else %}
+  <div class="empty">该链接在主数据映射表中不存在（缺映射），属性不推测。</div>
+  {% endif %}
+</div>
+
+<div class="kpi-grid kpi-grid-compact">
+  {% for k in page.kpi_cards %}
+  <div class="kpi-card static">
+    <div class="kpi-label">{{ k.label }}{{ info.info(k.tip) }}</div>
+    <div class="kpi-value">{{ k.value|fmtv(k.fmt) }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="chart-grid">
+  {% for c in page.chart_layout %}{{ m.chart_card(c) }}{% endfor %}
+</div>
+
+{% for t in page.tables %}{{ m.render_table(t) }}{% endfor %}
+
+{% endblock %}

@@ -1,0 +1,78 @@
+{# 模板组件：复用输出 kpi_card。 #}
+{# ── 通用模板宏 ── #}
+{# 作用：提供指标卡、图表卡、表格和分区标题的复用结构。 #}
+{% macro kpi_card(k) %}
+<a class="kpi-card" href="{{ k.link }}">
+  <div class="kpi-label">{{ k.label }}<span class="tip" data-tip="{{ k.tip }}">ⓘ</span></div>
+  <div class="kpi-value">{{ k.value|fmtv(k.fmt) }}{% if k.unit %}<span class="kpi-unit">{{ k.unit }}</span>{% endif %}</div>
+  <div class="kpi-delta {{ k.delta|delta_cls }}">
+    <span class="arrow">{{ k.delta|delta_arrow }}</span>
+    <span class="delta-value">{{ k.delta|delta_text(k.delta_kind) }}</span>
+    <span class="kpi-prev">上期 {{ k.prev|fmtv(k.fmt) }}</span>
+  </div>
+  {% if k.sub %}<div class="kpi-sub">{{ k.sub }}</div>{% endif %}
+</a>
+{% endmacro %}
+
+{# 模板组件：复用输出 chart_card。 #}
+{% macro chart_card(c) %}
+<div class="card chart-card {% if c.span == 2 %}span-2{% endif %}">
+  <div class="card-head">
+    <h2>{{ c.title }}</h2>
+  </div>
+  <div class="chart" id="{{ c.id }}" style="height: {{ c.height }}px;"></div>
+</div>
+{% endmacro %}
+
+{# 模板组件：复用输出 render_table。 #}
+{% macro render_table(t) %}
+<div class="card table-card">
+  <div class="card-head">
+    <h2>{{ t.title }}</h2>
+    {% if t.note %}<span class="card-note">{{ t.note }}</span>{% endif %}
+  </div>
+  {% if t.rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          {% for c in t.columns %}
+          <th class="{{ c.align }}">
+            {{ c.label }}{% if c.tip %}<span class="tip" data-tip="{{ c.tip }}">ⓘ</span>{% endif %}
+          </th>
+          {% endfor %}
+          {% if t.metric_table %}<th class="left">口径说明</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in t.rows %}
+        <tr>
+          {% for c in t.columns %}
+            {% set url = row.get(c.key ~ '_url') %}
+            <td class="{{ c.align }}">
+              {% if url %}
+                <a class="cell-link" href="{{ url }}">{{ row[c.key]|fmtv(c.fmt) }}</a>
+              {% else %}
+                {{ row[c.key]|fmtv(c.fmt) }}
+              {% endif %}
+            </td>
+          {% endfor %}
+          {% if t.metric_table %}<td class="left caliber-cell">{{ row.caliber }}</td>{% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty">{{ t.empty }}</div>
+  {% endif %}
+</div>
+{% endmacro %}
+
+{# 模板组件：复用输出 section_head。 #}
+{% macro section_head(title, subtitle) %}
+<div class="section-head">
+  <h2>{{ title }}</h2>
+  {% if subtitle %}<span>{{ subtitle }}</span>{% endif %}
+</div>
+{% endmacro %}

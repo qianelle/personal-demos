@@ -1,0 +1,6 @@
+{# 模板组件：复用输出 info。 #}
+{# ── 说明图标宏 ── #}
+{# 作用：输出带悬浮说明的说明图标。 #}
+{% macro info(text) -%}
+<span class="info-tip" tabindex="0" data-tip="{{ text }}">ⓘ</span>
+{%- endmacro %}

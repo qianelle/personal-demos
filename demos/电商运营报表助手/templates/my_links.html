@@ -1,0 +1,184 @@
+{# ── 链接管理页 ── #}
+{# 作用：展示标签卡、查询筛选、链接表与批量标签操作。 #}
+{% extends "base.html" %}
+{% import "_info.html" as info %}
+{# 页面区块：输出当前页面的主体内容。 #}
+{% block content %}
+
+{% if page.remove_result.removed not in (none, '') %}
+<div class="notice-card success">已移除 {{ page.remove_result.removed }} 条标签记录。</div>
+{% endif %}
+{% if page.write_result.ok not in (none, '') %}
+<div class="notice-card success">批量打标：目标标签「{{ page.write_result.tag }}」，写入 {{ page.write_result.ok }} 条。</div>
+{% endif %}
+{% if page.query_result.hit_count or page.query_result.miss_count %}
+<div class="link-query-bar {% if page.query_result.miss_count %}warn{% endif %}">
+  快捷查询：命中 <strong>{{ page.query_result.hit_count }}</strong> 个值 /
+  未命中 <strong>{{ page.query_result.miss_count }}</strong> 个值
+  {% if page.query_result.misses %}（{{ page.query_result.misses|join('、') }}）{% endif %}
+</div>
+{% endif %}
+
+<div class="mgmt-card-grid">
+  {% for item in page.cards %}
+  <a class="card mgmt-card {% if item.active %}active{% endif %}" href="{{ item.url }}">
+    <div class="mgmt-card-label">{{ item.label }}</div>
+    <div class="mgmt-card-value">{{ item.count|fmtv('int') }}<span>条</span></div>
+  </a>
+  {% endfor %}
+</div>
+
+<div class="card link-toolbar">
+  <div class="link-toolbar-left">
+    <span class="mgmt-owner-label">我的链接池</span>
+    <span class="muted">{{ page.pool.my_count }} 条</span>
+    {{ info.info('链接池由左侧「设置我的链接池」统一维护；本页不改链接池。') }}
+    <span class="tag-help" data-tip="主推款：运营确认的主推链接；动销款：有稳定成交；潜力款：上架30天内支付买家数≥20；测试款：新上架观察期；滞销款：近30天零销、上架30~180天；未打标：tag IS NULL。系统运行期不自动判定标签，全部为人工预置/人工设置。">!</span>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>链接管理表｜{{ page.range_label }}</h2>
+    <div class="table-head-actions">
+      <button type="button" class="btn btn-ghost" data-auto-table="linkTable">自动列宽</button>
+      <button type="button" class="btn btn-ghost" data-reset-table="linkTable">重置列宽</button>
+      <a class="btn btn-primary" href="{{ page.export_url }}">导出表格</a>
+    </div>
+  </div>
+  <div class="link-op-row">
+    <form method="get" action="/links" class="quick-query-form">
+      <input type="hidden" name="card" value="{{ page.card }}">
+      <input type="hidden" name="sort" value="{{ page.sort }}">
+      <input type="hidden" name="order" value="{{ page.order }}">
+      <input type="hidden" name="size" value="{{ page.pagination.size }}">
+      <label>快捷查询</label>
+      <select name="qfield">
+        {% for key, label in page.quick_fields.items() %}
+        <option value="{{ key }}" {% if page.quick_field == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="qvalue" value="{{ page.quick_value }}"
+             placeholder="支持多条，逗号/空格/换行分隔">
+      <button class="btn btn-primary" type="submit">查询</button>
+      <a class="btn btn-ghost" href="/links">重置</a>
+    </form>
+    <div class="batch-inline">
+      <form method="post" action="{{ page.tag_action }}" id="mgmtBatchForm">
+        <input type="hidden" name="card" value="{{ page.card }}">
+        <input type="hidden" name="return_url" value="{{ page.return_url }}">
+      </form>
+      <select name="tag" form="mgmtBatchForm">
+        <option value="">选择标签</option>
+        {% for tag in page.tag_options %}<option value="{{ tag }}">{{ tag }}</option>{% endfor %}
+      </select>
+      <button class="btn btn-primary" type="submit" form="mgmtBatchForm" data-requires-selection>写入所选</button>
+      <button class="btn btn-ghost" type="submit" form="mgmtBatchForm"
+              formaction="{{ page.remove_action }}" data-requires-selection
+              onclick="return confirm('确认移除所选链接的人工标签？链接仍保留在链接池。')">移除所选</button>
+    </div>
+  </div>
+
+  <details class="filter-panel">
+    <summary>高级筛选{% if page.has_filters %}（已应用）{% endif %}</summary>
+    <form method="get" action="/links" class="column-filter-form">
+      <input type="hidden" name="card" value="{{ page.card }}">
+      <input type="hidden" name="qfield" value="{{ page.quick_field }}">
+      <input type="hidden" name="qvalue" value="{{ page.quick_value }}">
+      <input type="hidden" name="sort" value="{{ page.sort }}">
+      <input type="hidden" name="order" value="{{ page.order }}">
+      <input type="hidden" name="size" value="{{ page.pagination.size }}">
+      <div class="filter-grid">
+        {% for col in page.columns if col.filter %}
+          {% if col.filter == 'range' %}
+          <div class="filter-cell"><label>{{ col.label }}</label>
+            <input type="number" step="0.01" name="f_{{ col.key }}_min"
+                   value="{{ request.args.get('f_' ~ col.key ~ '_min','') }}" placeholder="最小值">
+            <input type="number" step="0.01" name="f_{{ col.key }}_max"
+                   value="{{ request.args.get('f_' ~ col.key ~ '_max','') }}" placeholder="最大值">
+          </div>
+          {% elif col.filter == 'date' %}
+          <div class="filter-cell"><label>{{ col.label }}</label>
+            <input type="date" name="f_launch_from" value="{{ request.args.get('f_launch_from','') }}">
+            <input type="date" name="f_launch_to" value="{{ request.args.get('f_launch_to','') }}">
+          </div>
+          {% else %}
+          <div class="filter-cell"><label>{{ col.label }}</label>
+            <select name="f_{{ col.key }}" multiple size="4">
+              {% for value in page.filter_options[col.key] %}
+              <option value="{{ value }}" {% if value in page.selected_filters[col.key] %}selected{% endif %}>{{ value }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="filter-actions">
+        <button class="btn btn-primary" type="submit">应用筛选</button>
+        <a class="btn btn-ghost" href="{{ page.clear_url }}">清除筛选</a>
+      </div>
+    </form>
+  </details>
+
+  {% if page.rows %}
+    <div class="table-wrap"><table id="linkTable" class="data-table mgmt-table resizable-table"
+           data-resizable="linkTable">
+      <colgroup>
+        <col style="width: 56px">
+        {% for col in page.columns %}<col style="width: {{ col.width }}px">{% endfor %}
+      </colgroup>
+      <thead><tr>
+        <th class="center"><label class="select-all-label"><input type="checkbox" id="selectAllPage"> 选择</label></th>
+        {% for col in page.columns %}
+        <th class="{{ col.align }}">
+          {% if col.sortable %}
+          <a class="sort-link" href="{{ col.sort_url }}">{{ col.label }}
+            {% if page.sort == col.key %}<span class="sort-arrow">{{ '▲' if page.order == 'asc' else '▼' }}</span>{% endif %}
+          </a>
+          {% else %}{{ col.label }}{% endif %}
+        </th>
+        {% endfor %}</tr></thead>
+      <tbody>{% for row in page.rows %}
+        <tr><td class="center"><input class="row-select" type="checkbox" name="selected" value="{{ row.item_id }}" form="mgmtBatchForm"></td>
+          {% for col in page.columns %}
+          <td class="{{ col.align }}">
+            {% if col.key == 'item_id' %}<a href="{{ row.item_id_url }}">{{ row.item_id }}</a>
+            {% elif col.key == 'sales' or col.key == 'ad_cost' %}{{ row[col.key]|fmtv('money') }}
+            {% elif col.key == 'units' or col.key == 'pay_buyers' or col.key == 'launch_days' or col.key == 'launch_buyers_30' %}{{ row[col.key]|fmtv('int') }}
+            {% elif col.key == 'ad_spend_ratio' %}{{ row[col.key]|fmtv('pct') }}
+            {% else %}{{ row[col.key] }}{% endif %}
+          </td>
+          {% endfor %}</tr>
+      {% endfor %}</tbody>
+    </table></div>
+  {% else %}<div class="empty">当前筛选下暂无链接</div>{% endif %}
+
+  <div class="pagination">
+    {% if page.pagination.prev_url %}<a class="btn btn-ghost" href="{{ page.pagination.prev_url }}">上一页</a>{% endif %}
+    <span class="muted">第 {{ page.pagination.page }} / {{ page.pagination.pages }} 页 · 共 {{ page.pagination.total }} 条</span>
+    {% if page.pagination.next_url %}<a class="btn btn-ghost" href="{{ page.pagination.next_url }}">下一页</a>{% endif %}
+    <form method="get" action="/links" class="inline-form page-size-form">
+      <input type="hidden" name="card" value="{{ page.card }}">
+      <input type="hidden" name="qfield" value="{{ page.quick_field }}">
+      <input type="hidden" name="qvalue" value="{{ page.quick_value }}">
+      <input type="hidden" name="sort" value="{{ page.sort }}">
+      <input type="hidden" name="order" value="{{ page.order }}">
+      <label>每页
+        <select name="size" onchange="this.form.submit()">
+          {% for size in page.pagination.size_options %}<option value="{{ size }}" {% if page.pagination.size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+        </select> 条
+      </label>
+    </form>
+    <form method="get" action="/links" class="inline-form page-jump-form">
+      <input type="hidden" name="card" value="{{ page.card }}">
+      <input type="hidden" name="qfield" value="{{ page.quick_field }}">
+      <input type="hidden" name="qvalue" value="{{ page.quick_value }}">
+      <input type="hidden" name="sort" value="{{ page.sort }}">
+      <input type="hidden" name="order" value="{{ page.order }}">
+      <input type="hidden" name="size" value="{{ page.pagination.size }}">
+      <label>跳至 <input type="number" name="page" min="1" max="{{ page.pagination.pages }}" value="{{ page.pagination.page }}"> 页</label>
+      <button class="btn btn-ghost" type="submit">跳转</button>
+    </form>
+  </div>
+</div>
+
+{% endblock %}
