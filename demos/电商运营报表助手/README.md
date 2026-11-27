@@ -51,3 +51,13 @@ python run.py
 - `data/`：模拟源文件与 SQLite 数据库
 - `docs/`：说明文档
 - `output/`：导出文件与运行日志
+
+## 七、项目截图
+<img width="2229" height="1203" alt="image" src="https://github.com/user-attachments/assets/26f88842-67d9-42ca-a840-c2b520914185" />
+<img width="2229" height="1203" alt="image" src="https://github.com/user-attachments/assets/08278b62-554a-4c0e-9f15-4986f98d40b6" />
+<img width="2229" height="1203" alt="image" src="https://github.com/user-attachments/assets/dda88f62-0d2b-40c5-a3f0-852e95c9a139" />
+<img width="2229" height="2553" alt="image" src="https://github.com/user-attachments/assets/d12b19c0-3da9-4971-a2fe-ebebfaa11e67" />
+
+
+
+
